@@ -59,7 +59,7 @@ function noise(dest, t, dur, peak, freq, q = 1, type = 'bandpass') {
 AUDIO.sfx = function (name, vol = 1, k = 0) {
   if (!AUDIO.started || AUDIO.ctx.state !== 'running' || vol <= 0.02) return;
   const c = AUDIO.ctx, t = c.currentTime, d = AUDIO.sfxBus;
-  const lim = { chop: 0.06, fall: 0.2, pick: 0.08, drop: 0.12, coin: 0.12 }[name] || 0.03;
+  const lim = { chop: 0.06, fall: 0.2, pick: 0.08, drop: 0.12, coin: 0.12, saw: 0.5, crackle: 0.5, tap: 0.4, plant: 0.2 }[name] || 0.03;
   if (AUDIO.lastSfx[name] && t - AUDIO.lastSfx[name] < lim) return;
   AUDIO.lastSfx[name] = t;
   const V = vol;
@@ -92,6 +92,12 @@ AUDIO.sfx = function (name, vol = 1, k = 0) {
     case 'upgrade': [1245, 1865, 2489].forEach((f, i) => tone(d, 'sine', f, f * 0.995, t, 0.9 - i * 0.2, 0.09 - i * 0.02)); noise(d, t, 0.04, 0.3, 3000, 2); tone(d, 'triangle', 196, 392, t + 0.1, 0.3, 0.1); break;
     case 'goal': [392, 494, 587, 784, 988].forEach((f, i) => { tone(d, 'triangle', f, f, t + i * 0.11, 0.5, 0.14); tone(d, 'sine', f / 2, f / 2, t + i * 0.11, 0.6, 0.08); }); break;
     case 'queue': tone(d, 'sine', 660, 880, t, 0.07, 0.1); break;
+    case 'plant': tone(d, 'sine', 300, 520, t, 0.1, 0.1 * V); noise(d, t, 0.08, 0.08 * V, 500, 1); break;
+    case 'saw': noise(d, t, 0.22, 0.14 * V, 2600, 6); noise(d, t + 0.24, 0.2, 0.1 * V, 2100, 6); break;
+    case 'crackle': for (let i = 0; i < 4; i++) noise(d, t + Math.random() * 0.4, 0.03, 0.12 * V, 2500 + Math.random() * 2500, 3); break;
+    case 'tap': tone(d, 'triangle', 620, 420, t, 0.05, 0.14 * V); tone(d, 'triangle', 700, 460, t + 0.16, 0.05, 0.12 * V); noise(d, t, 0.03, 0.1 * V, 2600, 2); break;
+    case 'hat': [659, 784, 988, 1319, 1568].forEach((f, i) => tone(d, 'triangle', f, f, t + i * 0.07, 0.35, 0.12)); tone(d, 'sine', 2637, 2637, t + 0.36, 0.5, 0.06); break;
+    case 'order': tone(d, 'sine', 1175, 1175, t, 0.3, 0.09); tone(d, 'sine', 1568, 1568, t + 0.12, 0.4, 0.08); break;
   }
 };
 

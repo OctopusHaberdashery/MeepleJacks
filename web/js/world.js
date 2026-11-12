@@ -1,4 +1,4 @@
-// MeepleJacks — the forest, the simulation (you, lumberjacks, haulers) and saving.
+// MeepleJacks — the forest, the simulation (you and every kind of crew), orders, the Great Lodge and saving.
 'use strict';
 
 let S = null;      // saved state
@@ -24,8 +24,9 @@ function ringOf(dd) { let r = 0; while (r < NT - 1 && dd >= RINGS[r + 1]) r++; r
 function genMap(seed) {
   W = {
     kind: new Uint8Array(NTILES), g: new Float32Array(NTILES), ter: new Uint8Array(NTILES), block: new Uint8Array(NTILES),
-    vr: new Uint8Array(NTILES), jx: new Int8Array(NTILES), jy: new Int8Array(NTILES),
+    vr: new Uint8Array(NTILES), jx: new Int8Array(NTILES), jy: new Int8Array(NTILES), orig: null,
     hp: new Map(), claim: new Map(), shake: new Map(), growing: new Set(), pileAt: new Map(), pileById: new Map(), bById: new Map(),
+    dirty: [],     // tiles whose look changed, for the zoomed-out tree cache
   };
   for (let y = 0; y < MH; y++) for (let x = 0; x < MW; x++) {
     const i = idx(x, y), px = x * TS + 8, py = y * TS + 8;
@@ -48,6 +49,7 @@ function genMap(seed) {
       W.jx[i] = ((hash2(x, y, seed + 21) * 7) | 0) - 3; W.jy[i] = ((hash2(x, y, seed + 22) * 5) | 0) - 2;
     }
   }
+  W.orig = W.kind.slice();
 }
 function rebuildBlocks() {
   for (let i = 0; i < NTILES; i++) W.block[i] = W.ter[i] ? 1 : 0;
@@ -58,43 +60,70 @@ function rebuildBlocks() {
     for (let yy = 0; yy < B.h; yy++) for (let xx = 0; xx < B.w; xx++) {
       const i = idx(b.x + xx, b.y + yy);
       W.block[i] = 1;
-      if (W.kind[i]) { W.kind[i] = 0; W.growing.delete(i); W.hp.delete(i); W.claim.delete(i); }
+      if (W.kind[i]) { W.kind[i] = 0; W.growing.delete(i); W.hp.delete(i); W.claim.delete(i); W.dirty.push(i); }
     }
   }
+}
+function setGrow(i, g) {     // change a tree's growth, noting when its sprite changes
+  const a = W.g[i], st = v => v >= 1 ? 3 : v < 0.12 ? 0 : v < 0.45 ? 1 : 2;
+  W.g[i] = g;
+  if (st(a) !== st(g)) W.dirty.push(i);
 }
 const treeXY = i => ({ x: (i % MW) * TS + 8 + W.jx[i], y: ((i / MW) | 0) * TS + 12 + W.jy[i] });
 const pileXY = p => { const t = treeXY(p.i); return { x: t.x + 5, y: t.y + 3 }; };
 const bBase = b => ({ x: (b.x + BUILD[b.type].w / 2) * TS, y: (b.y + BUILD[b.type].h) * TS });   // bottom-centre of the footprint
-const bDoor = b => ({ x: (b.x + (b.type === 'yard' ? 2.5 : 1.2)) * TS, y: (b.y + BUILD[b.type].h) * TS + 7 });
+const doorCol = type => BUILD[type].w === 5 ? 2.5 : BUILD[type].w === 2 ? 1 : 1.2;
+const bDoor = b => ({ x: (b.x + doorCol(b.type)) * TS, y: (b.y + BUILD[b.type].h) * TS + 7 });
 const yard = () => S.buildings[0];
 const cabins = () => S.buildings.filter(b => b.type === 'cabin');
+const countB = type => S.buildings.reduce((n, b) => n + (b.type === type ? 1 : 0), 0);
 const crewOf = id => S.workers.filter(w => w.home === id);
 const countRole = role => S.workers.reduce((n, w) => n + (w.role === role ? 1 : 0), 0);
+const countForemen = () => S.buildings.reduce((n, b) => n + (b.foreman ? 1 : 0), 0);
+
+// ---------------------------------------------------------------- lasting bonuses
+const lodgeDone = n => S.lodgeStage >= n;
+const cabinBeds = () => BUILD.cabin.beds + (lodgeDone(1) ? 1 : 0) + (lodgeDone(3) ? 1 : 0) + (lodgeDone(5) ? 1 : 0);
+const bedsOf = b => b.type === 'cabin' ? cabinBeds() : b.type === 'lodge' ? BUILD.lodge.beds + (S.lodgeStage >> 1) : (BUILD[b.type].beds || 0);
+const playerCap = () => PLAYER_CARRY + S.pack;
+const playerSpeed = () => PLAYER_SPEED * (1 + 0.12 * S.boots);
+const crewSpeed = (w, home) => CREW_SPEED * (1 + 0.12 * S.crewBoots) * (lodgeDone(2) ? 1.1 : 1) * (home && home.foreman ? 1.3 : 1) * (w.role === 'carter' ? 1.15 : 1);
+const haulerCap = () => HAULER_CARRY + 2 * S.crewPack + (lodgeDone(6) ? 4 : 0);
+const carterCap = () => CARTER_CARRY + 12 * S.carts;
+const craftSpeed = role => (role === 'sawyer' ? 1 + 0.3 * S.blades : role === 'carpenter' ? 1 + 0.3 * S.chisels : 1) * (lodgeDone(4) ? 1.25 : 1);
+const craftBatch = role => role === 'sawyer' ? 6 + 2 * S.blades : role === 'carpenter' ? 6 + 2 * S.chisels : 9;
+const plantTo = () => Math.min(0.9, 0.5 + 0.1 * S.seeds);
 
 // ---------------------------------------------------------------- new game
 function blankState(slot, seed) {
-  const z = () => new Array(NT).fill(0);
+  const z = n => new Array(n).fill(0);
   return {
-    v: 1, slot, seed, created: Date.now(), savedAt: 0, playTime: 0,
-    coins: 0, inv: z(), sold: z(), seen: z(), autosell: z(),
-    stats: { chopped: 0, delivered: 0, sales: 0, earned: 0, cut: z() },
-    axe: 1, crewAxe: 1, boots: 0, pack: 0, crewBoots: 0, crewPack: 0,
+    v: 2, slot, seed, created: Date.now(), savedAt: 0, playTime: 0,
+    coins: 0, inv: z(NI), sold: z(NI), seen: z(NI), autosell: z(NI), keep: z(NI),
+    stats: { chopped: 0, delivered: 0, sales: 0, earned: 0, cut: z(NT), made: { plank: 0, furn: 0, char: 0 }, orders: 0, planted: 0 },
+    axe: 1, crewAxe: 1, boots: 0, pack: 0, crewBoots: 0, crewPack: 0, seeds: 0, blades: 0, carts: 0, chisels: 0,
     buildings: [{ id: 1, type: 'yard', x: CX - 2, y: CY - 2 }], nextId: 2,
-    workers: [], piles: [], goal: 0, won: false,
+    workers: [], piles: [], goalsDone: {}, won: false, lodgeStage: 0, lodgeStep: 0,
+    hats: [], hat: null, crewHat: null, gait: 0, hatPity: 0,
+    orders: [], orderT: 60,
     player: { x: YARD_X, y: (CY + 1) * TS + 12, face: 1, carry: [] },
   };
 }
+function resetWorker(w) {
+  Object.assign(w, { st: 'idle', path: [], wait: Math.random(), target: -1, carry: w.carry || [], res: 0, swing: 0, workT: 0, tick: 0, drop: 0, walkT: Math.random() * 3, moving: false, note: '', face: w.face || 1 });
+  if (w.gait == null) w.gait = (Math.random() * GAITS.length) | 0;
+}
 function resetTransient() {
   const P = S.player;
-  Object.assign(P, { st: 'idle', path: [], queue: [], own: [], auto: false, target: -1, swing: 0, pause: 0, walkT: 0, moving: false });
+  Object.assign(P, { st: 'idle', path: [], queue: [], own: [], auto: false, target: -1, swing: 0, pause: 0, walkT: 0, moving: false, drop: 0 });
   P.carry = P.carry || [];
-  for (const w of S.workers) Object.assign(w, { st: 'idle', path: [], wait: Math.random(), target: -1, carry: [], res: 0, swing: 0, walkT: Math.random() * 3, moving: false, note: '', face: w.face || 1 });
+  for (const w of S.workers) { w.carry = []; resetWorker(w); }
   W.pileAt.clear(); W.pileById.clear();
   for (const p of S.piles) { p.res = 0; p.t = p.t || 0; W.pileAt.set(p.i, p); W.pileById.set(p.id, p); }
 }
 function newGame(slot) {
   S = blankState(slot, (Math.random() * 2e9) | 0);
-  S.seen[0] = 1;
+  S.seen[0] = 1; S.gait = (Math.random() * GAITS.length) | 0;
   genMap(S.seed); rebuildBlocks(); resetTransient();
 }
 
@@ -169,6 +198,24 @@ function moveStep(e, dt, speed) {
   e.moving = e.path.length > 0; e.walkT += dt;
   return !e.path.length;
 }
+// The nearest tile to (cx, cy) that passes `test`, searching outward in rings with no distance limit.
+function nearestTile(cx, cy, test) {
+  let best = -1, bd = 1e9, stop = 1e9;
+  const look = (x, y) => {
+    if (x < 0 || y < 0 || x >= MW || y >= MH) return;
+    const i = y * MW + x; if (!test(i)) return;
+    const d = (x - cx) * (x - cx) + (y - cy) * (y - cy);
+    if (d < bd) { bd = d; best = i; }
+  };
+  for (let r = 0; r <= stop; r++) {
+    const x0 = cx - r, x1 = cx + r, y0 = cy - r, y1 = cy + r;
+    if (x0 < 0 && y0 < 0 && x1 >= MW && y1 >= MH) break;
+    for (let x = x0; x <= x1; x++) { look(x, y0); if (r) look(x, y1); }
+    for (let y = y0 + 1; y < y1; y++) { look(x0, y); look(x1, y); }
+    if (best >= 0 && stop === 1e9) stop = Math.ceil(r * 1.42) + 1;
+  }
+  return best;
+}
 
 // ---------------------------------------------------------------- trees, piles, money
 const canCut = (axe, kind) => axe >= kind;
@@ -182,12 +229,19 @@ function hitTree(i, dmg, who) {
   fellTree(i, who); return true;
 }
 function fellTree(i, who) {
-  const k = W.kind[i], T = TREES[k - 1], p = treeXY(i);
-  W.hp.delete(i); W.claim.delete(i); W.g[i] = 0; W.growing.add(i);
+  const k = W.kind[i], T = TREES[k - 1], p = treeXY(i), me = who === S.player;
+  W.hp.delete(i); W.claim.delete(i); setGrow(i, 0); W.growing.add(i);
   const pile = { id: S.nextId++, i, type: k - 1, n: T.logs, res: 0, t: 0.75 };
   S.piles.push(pile); W.pileAt.set(i, pile); W.pileById.set(pile.id, pile);
   S.stats.chopped++; S.stats.cut[k - 1]++; S.seen[k - 1] = 1;
-  EV.push({ t: 'fall', x: p.x, y: p.y, k, v: W.vr[i], dir: who.x < p.x ? 1 : -1, me: who === S.player });
+  EV.push({ t: 'fall', x: p.x, y: p.y, k, v: W.vr[i], dir: who.x < p.x ? 1 : -1, me });
+  // a hat may be hiding in the branches
+  const pool = HATS.filter(h => h.tree === k - 1 && !S.hats.includes(h.id));
+  if (pool.length) {
+    const chance = me ? 0.04 + 0.012 * S.hatPity : 0.006;
+    if (Math.random() < chance) { const h = pool[(Math.random() * pool.length) | 0]; S.hats.push(h.id); if (me) S.hatPity = 0; EV.push({ t: 'hat', hat: h, x: p.x, y: p.y, me: true }); }
+    else if (me) S.hatPity++;
+  }
   return pile;
 }
 function takeFromPile(e, pile, want) {
@@ -198,16 +252,41 @@ function takeFromPile(e, pile, want) {
   if (n) EV.push({ t: 'pick', x: e.x, y: e.y, me: e === S.player });
   return n;
 }
-function sell(t, n) {
-  n = Math.min(n, S.inv[t]); if (n <= 0) return 0;
-  const v = n * TREES[t].price;
-  S.inv[t] -= n; S.sold[t] += n; S.coins += v; S.stats.sales += n; S.stats.earned += v;
+const spare = it => Math.max(0, S.inv[it] - S.keep[it]);     // what may be sold or used, above the amount held back
+function sell(it, n) {
+  n = Math.min(n, S.inv[it]); if (n <= 0) return 0;
+  const v = n * ITEMS[it].price;
+  S.inv[it] -= n; S.sold[it] += n; S.coins += v; S.stats.sales += n; S.stats.earned += v;
   return v;
 }
-function sellAll() { let v = 0; for (let t = 0; t < NT; t++) v += sell(t, S.inv[t]); return v; }
+function sellAll() { let v = 0; for (let it = 0; it < NI; it++) v += sell(it, spare(it)); return v; }
+const depotLoad = b => b.store.reduce((a, n) => a + n, 0);
+// where a load of logs should go: the yard, or a staffed depot with room if that is nearer
+function dropFor(e) {
+  let best = yard(); const d0 = bDoor(best); let bd = Math.hypot(d0.x - e.x, d0.y - e.y);
+  for (const b of S.buildings) {
+    if (b.type !== 'depot' || depotLoad(b) >= DEPOT_ROOM || !S.workers.some(w => w.home === b.id)) continue;
+    const d = bDoor(b), dd = Math.hypot(d.x - e.x, d.y - e.y);
+    if (dd < bd) { bd = dd; best = b; }
+  }
+  return best;
+}
+const yardDrop = () => { const d = bDoor(yard()); return { x: d.x - 26 + Math.random() * 30, y: d.y + Math.random() * 4 }; };
+function goDrop(e, b) {
+  b = b || dropFor(e); e.drop = b.id; e.st = 'toYard';
+  const d = b.type === 'yard' ? yardDrop() : { x: bDoor(b).x - 10 + Math.random() * 20, y: bDoor(b).y + Math.random() * 4 };
+  goTo(e, d.x, d.y);
+}
 function deposit(e) {
+  const b = W.bById.get(e.drop), depot = b && b.type === 'depot' ? b : null;
   let coins = 0; const n = e.carry.length;
-  for (const t of e.carry) { S.inv[t]++; S.stats.delivered++; S.seen[t] = 1; if (S.autosell[t]) coins += sell(t, 1); }
+  for (const it of e.carry) {
+    const log = ITEMS[it].kind === 'log';
+    if (log && e.role !== 'carter') S.stats.delivered++;
+    if (depot && log) { depot.store[it]++; continue; }
+    S.inv[it]++; S.seen[it] = 1;
+    if (S.autosell[it] && S.inv[it] > S.keep[it]) coins += sell(it, 1);
+  }
   e.carry = [];
   if (n) EV.push({ t: 'deposit', x: e.x, y: e.y, n, coins, me: e === S.player });
 }
@@ -215,12 +294,6 @@ const canAfford = c => S.coins >= c.coins && c.wood.every(([t, n]) => S.inv[t] >
 function pay(c) { S.coins -= c.coins; for (const [t, n] of c.wood) S.inv[t] -= n; }
 
 // ---------------------------------------------------------------- you
-const playerCap = () => PLAYER_CARRY + S.pack;
-const playerSpeed = () => PLAYER_SPEED * (1 + 0.12 * S.boots);
-const crewSpeed = () => CREW_SPEED * (1 + 0.12 * S.crewBoots);
-const haulerCap = () => HAULER_CARRY + 2 * S.crewPack;
-const yardDrop = () => { const d = bDoor(yard()); return { x: d.x - 26 + Math.random() * 30, y: d.y + Math.random() * 4 }; };
-
 function startChop(e, i) {
   const p = treeXY(i), side = e.x < p.x ? -1 : 1;
   e.target = i; e.st = 'toTree'; goTo(e, p.x + side * 7, p.y + 2);
@@ -243,12 +316,12 @@ function cmdPile(pile) {
   const P = S.player;
   P.auto = true; P.queue = [];
   if (!P.own.includes(pile.id)) P.own.push(pile.id);
-  if (P.carry.length >= playerCap()) { P.st = 'toYard'; const d = yardDrop(); goTo(P, d.x, d.y); return; }
+  if (P.carry.length >= playerCap()) { goDrop(P); return; }
   goPile(P, pile);
 }
-function cmdYard() {
+function cmdDrop(b) {
   const P = S.player; if (!P.carry.length) return false;
-  P.auto = true; P.queue = []; P.st = 'toYard'; const d = yardDrop(); goTo(P, d.x, d.y); return true;
+  P.auto = true; P.queue = []; goDrop(P, b); return true;
 }
 function cmdWalk(x, y) {
   const P = S.player;
@@ -262,7 +335,7 @@ function playerThink() {
   const P = S.player;
   while (P.queue.length) { const i = P.queue.shift(); if (isMature(i) && canCut(S.axe, W.kind[i])) { startChop(P, i); return; } }
   P.own = P.own.filter(id => { const p = W.pileById.get(id); return p && p.n - p.res > 0; });
-  if (P.carry.length >= playerCap() || (P.carry.length && !P.own.length)) { P.st = 'toYard'; const d = yardDrop(); goTo(P, d.x, d.y); return; }
+  if (P.carry.length >= playerCap() || (P.carry.length && !P.own.length)) { goDrop(P); return; }
   if (P.own.length) {
     let best = null, bd = 1e9;
     for (const id of P.own) { const p = W.pileById.get(id), q = pileXY(p), d = Math.hypot(q.x - P.x, q.y - P.y); if (d < bd) { bd = d; best = p; } }
@@ -308,50 +381,91 @@ function updPlayer(dt) {
 }
 
 // ---------------------------------------------------------------- the crew
-function findTreeFor(w, home) {
-  const R = BUILD.cabin.radius, cx = home.x + 1, cy = home.y + 1, P = S.player;
-  let best = -1, bd = 1e9, tough = false;
-  for (let y = Math.max(0, cy - R); y <= Math.min(MH - 1, cy + R); y++) for (let x = Math.max(0, cx - R); x <= Math.min(MW - 1, cx + R); x++) {
-    const i = idx(x, y), k = W.kind[i];
-    if (!k || W.g[i] < 1) continue;
-    if ((x - cx) * (x - cx) + (y - cy) * (y - cy) > R * R) continue;
-    if (!canCut(S.crewAxe, k)) { tough = true; continue; }
-    if (W.claim.has(i) || P.target === i && (P.st === 'chop' || P.st === 'toTree')) continue;
-    const d = Math.hypot(x * TS - w.x, y * TS - w.y);
-    if (d < bd) { bd = d; best = i; }
-  }
-  return { i: best, tough };
+function releaseWorker(w) {
+  if ((w.role === 'jack' || w.role === 'forester') && w.target >= 0 && W.claim.get(w.target) === w.id) W.claim.delete(w.target);
+  if (w.role === 'hauler' && w.res) { const p = W.pileById.get(w.target); if (p) p.res = Math.max(0, p.res - w.res); w.res = 0; }
+  if (w.role === 'builder' && w.carry.length) { const b = W.bById.get(w.home); for (const it of w.carry) { S.inv[it]++; if (b && b.tr[it]) b.tr[it]--; } w.carry = []; }
 }
+// A cabin set to one wood hauls that wood first, and only clears other piles when none of its own are waiting.
 function findPileFor(w, home, near) {
-  const hd = bDoor(home); let best = null, bs = 1e9;
+  const hd = bDoor(home); let best = null, bs = 1e9, other = null, os = 1e9;
   for (const p of S.piles) {
     if (p.n - p.res <= 0) continue;
     const q = pileXY(p), dw = Math.hypot(q.x - w.x, q.y - w.y);
     if (near && dw > near) continue;
     const s = Math.hypot(q.x - hd.x, q.y - hd.y) + dw * 0.5;
-    if (s < bs) { bs = s; best = p; }
+    if (home.wood >= 0 && p.type !== home.wood) { if (s < os) { os = s; other = p; } }
+    else if (s < bs) { bs = s; best = p; }
   }
-  return best;
+  return best || other;
 }
-function releaseWorker(w) {
-  if (w.role === 'jack' && w.target >= 0 && W.claim.get(w.target) === w.id) W.claim.delete(w.target);
-  if (w.role === 'hauler' && w.res) { const p = W.pileById.get(w.target); if (p) p.res = Math.max(0, p.res - w.res); w.res = 0; }
+// what a sawyer, collier or carpenter should fetch next: -1 if the yard has nothing spare for them
+function pickInput(role, b) {
+  const R = RECIPE[role], ok = t => spare(R.inp(t)) >= R.per;
+  if (b.wood >= 0) return b.wood < R.types && ok(b.wood) ? b.wood : -1;
+  if (role === 'collier') { for (let t = 0; t < R.types; t++) if (ok(t)) return t; return -1; }   // cheapest wood first
+  for (let t = R.types - 1; t >= 0; t--) if (ok(t)) return t;                                     // best wood first
+  return -1;
 }
+const WOOD_NAME = b => b.wood >= 0 ? TREES[b.wood].name : '';
 function tryJob(w, home) {
-  if (w.role === 'jack') {
-    const f = findTreeFor(w, home);
-    if (f.i < 0) { w.note = f.tough ? 'Needs a better crew axe for these trees' : 'Waiting for trees to grow back'; return false; }
-    W.claim.set(f.i, w.id); startChop(w, f.i); w.note = 'Off to chop ' + TREES[W.kind[f.i] - 1].name; return true;
+  const hx = home.x + (BUILD[home.type].w >> 1), hy = home.y + 1, P = S.player;
+  if (w.role === 'builder') {
+    if (w.carry.length) releaseWorker(w);
+    const it = lodgeWants(home);
+    if (it < 0) {
+      const st = lodgeStep(), miss = st && st.need.find(([i, n]) => (home.got[i] || 0) + (home.tr[i] || 0) < n);
+      w.note = !st ? 'Admiring the finished Lodge' : miss ? 'Waiting for ' + ITEMS[miss[0]].name.toLowerCase() + ' in the yard' : 'Waiting for the coins to be paid';
+      return false;
+    }
+    const d = yardDrop(); w.st = 'fetch'; goTo(w, d.x, d.y); w.note = 'Fetching ' + ITEMS[it].name.toLowerCase();
+    return true;
   }
-  const room = haulerCap() - w.carry.length;
-  const p = room > 0 ? findPileFor(w, home, w.carry.length ? 8 * TS : 0) : null;
-  if (p) { w.res = Math.min(room, p.n - p.res); p.res += w.res; goPile(w, p); w.note = 'Fetching ' + TREES[p.type].name + ' logs'; return true; }
-  if (w.carry.length) { w.st = 'toYard'; const d = yardDrop(); goTo(w, d.x, d.y); w.note = 'Hauling ' + w.carry.length + ' logs to the yard'; return true; }
-  w.note = 'No logs to haul';
-  return false;
+  if (w.carry.length && w.role !== 'hauler') { goDrop(w, yard()); w.note = 'Taking a load to the yard'; return true; }
+  switch (w.role) {
+    case 'jack': {
+      const want = home.wood;
+      if (want >= 0 && !canCut(S.crewAxe, want + 1)) { w.note = 'Needs the ' + AXES[want + 1].name + ' to cut ' + TREES[want].name; return false; }
+      const i = nearestTile(hx, hy, t => W.kind[t] > 0 && W.g[t] >= 1 && (want < 0 ? W.kind[t] <= S.crewAxe : W.kind[t] === want + 1) && !W.claim.has(t) && !(P.target === t && (P.st === 'chop' || P.st === 'toTree')));
+      if (i < 0) { w.note = 'Waiting for ' + (want >= 0 ? TREES[want].name : 'trees') + ' to grow back'; return false; }
+      W.claim.set(i, w.id); startChop(w, i); w.note = 'Off to chop ' + TREES[W.kind[i] - 1].name; return true;
+    }
+    case 'hauler': {
+      const room = haulerCap() - w.carry.length;
+      const p = room > 0 ? findPileFor(w, home, w.carry.length ? 8 * TS : 0) : null;
+      if (p) { w.res = Math.min(room, p.n - p.res); p.res += w.res; goPile(w, p); w.note = 'Fetching ' + TREES[p.type].name + ' logs'; return true; }
+      if (w.carry.length) { goDrop(w); w.note = 'Hauling ' + w.carry.length + ' logs in'; return true; }
+      w.note = 'No logs to haul';
+      return false;
+    }
+    case 'forester': {
+      const want = home.wood;
+      const i = nearestTile(hx, hy, t => W.kind[t] > 0 && W.g[t] < 0.45 && (want < 0 || W.kind[t] === want + 1) && !W.pileAt.has(t) && !W.claim.has(t));
+      if (i < 0) { w.note = 'No stumps to replant'; return false; }
+      W.claim.set(i, w.id); startChop(w, i); w.note = 'Off to replant ' + TREES[W.kind[i] - 1].name; return true;
+    }
+    case 'carter': {
+      const d = bDoor(home);
+      if (Math.hypot(d.x - w.x, d.y - w.y) > 26) { w.st = 'load'; goTo(w, d.x - 8 + Math.random() * 16, d.y + Math.random() * 4); w.note = 'Heading back to the depot'; return true; }
+      const load = depotLoad(home), cap = carterCap();
+      w.tick += 1;
+      if (load <= 0 || (load < Math.min(cap, 12) && w.tick < 6)) { w.note = load ? 'Waiting for a fuller load' : 'The depot is empty'; return false; }
+      w.tick = 0;
+      for (let it = NT - 1; it >= 0 && w.carry.length < cap; it--) while (home.store[it] > 0 && w.carry.length < cap) { home.store[it]--; w.carry.push(it); }
+      goDrop(w, yard()); w.note = 'Carting ' + w.carry.length + ' logs to the yard';
+      EV.push({ t: 'pick', x: w.x, y: w.y });
+      return true;
+    }
+    default: {      // sawyer, collier, carpenter
+      const t = pickInput(w.role, home);
+      if (t < 0) { w.note = 'Waiting for ' + (w.role === 'carpenter' ? 'planks' : 'logs') + ' to spare in the yard'; return false; }
+      const d = yardDrop(); w.st = 'fetch'; goTo(w, d.x, d.y); w.note = 'Fetching ' + ITEMS[RECIPE[w.role].inp(t)].name.toLowerCase();
+      return true;
+    }
+  }
 }
 function updWorker(w, dt) {
-  const sp = crewSpeed(), home = W.bById.get(w.home);
+  const home = W.bById.get(w.home), sp = crewSpeed(w, home), boss = home.foreman ? 1.3 : 1;
   if (w.swing > 0) w.swing -= dt;
   switch (w.st) {
     case 'idle':
@@ -360,20 +474,35 @@ function updWorker(w, dt) {
       w.wait -= dt;
       if (w.wait > 0) break;
       if (!tryJob(w, home)) {
-        w.wait = 1.6 + Math.random();
+        w.wait = 1.8 + Math.random();
         const d = bDoor(home);
         if (w.st === 'idle' && Math.hypot(d.x - w.x, d.y - w.y) > 34) { w.st = 'home'; goTo(w, d.x - 14 + Math.random() * 28, d.y + Math.random() * 12); }
       }
       break;
-    case 'toTree':
-      if (!isMature(w.target)) { releaseWorker(w); w.st = 'idle'; w.wait = 0.2; break; }
-      if (moveStep(w, dt, sp)) { w.st = 'chop'; w.swing = CREW_SWING * 0.6; w.face = treeXY(w.target).x > w.x ? 1 : -1; w.note = 'Chopping ' + TREES[W.kind[w.target] - 1].name; }
+    case 'toTree': {
+      const i = w.target, plant = w.role === 'forester';
+      const ok = plant ? (W.kind[i] > 0 && W.g[i] < 0.45 && !W.pileAt.has(i)) : isMature(i);
+      if (!ok) { releaseWorker(w); w.st = 'idle'; w.wait = 0.2; break; }
+      if (moveStep(w, dt, sp)) {
+        w.face = treeXY(i).x > w.x ? 1 : -1;
+        if (plant) { w.st = 'plant'; w.workT = 1.4; w.note = 'Replanting ' + TREES[W.kind[i] - 1].name; }
+        else { w.st = 'chop'; w.swing = CREW_SWING * 0.6; w.note = 'Chopping ' + TREES[W.kind[i] - 1].name; }
+      }
       break;
+    }
     case 'chop':
       w.moving = false;
       if (!isMature(w.target)) { releaseWorker(w); w.st = 'idle'; w.wait = 0.2; break; }
-      if (w.swing <= 0) { w.swing += CREW_SWING; if (hitTree(w.target, S.crewAxe, w)) { w.st = 'idle'; w.wait = 1.6; w.swing = 0; w.target = -1; } }
+      if (w.swing <= 0) { w.swing += CREW_SWING / boss; if (hitTree(w.target, S.crewAxe, w)) { w.st = 'idle'; w.wait = 1.6 / boss; w.swing = 0; w.target = -1; } }
       break;
+    case 'plant': {
+      w.moving = false; w.workT -= dt * boss;
+      if (w.workT > 0) break;
+      const i = w.target;
+      if (W.kind[i] > 0 && W.g[i] < plantTo() && !W.pileAt.has(i)) { setGrow(i, plantTo()); S.stats.planted++; const p = treeXY(i); EV.push({ t: 'plant', x: p.x, y: p.y, k: W.kind[i] }); }
+      releaseWorker(w); w.target = -1; w.st = 'idle'; w.wait = 0.4;
+      break;
+    }
     case 'toPile': {
       const pile = W.pileById.get(w.target);
       if (!pile) { w.res = 0; w.st = 'idle'; w.wait = 0.1; break; }
@@ -386,19 +515,66 @@ function updWorker(w, dt) {
       break;
     }
     case 'toYard': if (moveStep(w, dt, sp)) { deposit(w); w.st = 'idle'; w.wait = 0.3; } break;
+    case 'load': if (moveStep(w, dt, sp)) { w.st = 'idle'; w.wait = 0.3; } break;
+    case 'fetch':
+      if (w.role === 'builder') {
+        if (!moveStep(w, dt, sp)) break;
+        const st = lodgeStep();
+        if (st) for (const [it, n] of st.need) {
+          const take = Math.min(BUILDER_CARRY - w.carry.length, S.inv[it], n - (home.got[it] || 0) - (home.tr[it] || 0));
+          if (take > 0) { S.inv[it] -= take; home.tr[it] = (home.tr[it] || 0) + take; for (let k = 0; k < take; k++) w.carry.push(it); }
+        }
+        if (!w.carry.length) { w.st = 'idle'; w.wait = 2; break; }
+        w.st = 'toWork'; const d = bDoor(home); goTo(w, d.x - 30 + Math.random() * 60, d.y + Math.random() * 5);
+        EV.push({ t: 'pick', x: w.x, y: w.y }); w.note = 'Carrying ' + ITEMS[w.carry[0]].name.toLowerCase() + ' to the Lodge';
+        break;
+      }
+      if (moveStep(w, dt, sp)) {
+        const R = RECIPE[w.role], t = pickInput(w.role, home);
+        if (t < 0) { w.st = 'idle'; w.wait = 2; w.note = 'Nothing to spare in the yard'; break; }
+        const it = R.inp(t), n = Math.floor(Math.min(craftBatch(w.role), spare(it)) / R.per) * R.per;
+        S.inv[it] -= n; for (let k = 0; k < n; k++) w.carry.push(it);
+        w.target = t; w.st = 'toWork';
+        const d = bDoor(home); goTo(w, d.x - 5 + Math.random() * 10, d.y + Math.random() * 3);
+        EV.push({ t: 'pick', x: w.x, y: w.y });
+        w.note = 'Carrying ' + ITEMS[it].name.toLowerCase() + ' to work';
+      }
+      break;
+    case 'toWork':
+      if (w.role === 'builder') { if (moveStep(w, dt, sp)) { w.st = 'work'; w.workT = w.carry.length * BUILDER_TIME; w.tick = 0; w.note = 'Building the Lodge'; } break; }
+      if (moveStep(w, dt, sp)) {
+        const R = RECIPE[w.role];
+        w.st = 'work'; w.workT = (w.carry.length / R.per) * R.time / craftSpeed(w.role); w.tick = 0; w.face = 1;
+        w.note = w.role === 'sawyer' ? 'Sawing planks' : w.role === 'collier' ? 'Tending the kiln' : 'Building ' + FURN_NAMES[w.target] + 's';
+      }
+      break;
+    case 'work': {
+      w.moving = false; w.workT -= dt; w.tick -= dt;
+      if (w.tick <= 0) { w.tick = 0.55; const b = bBase(home); EV.push({ t: 'work', role: w.role, x: b.x, y: b.y, wx: w.x, wy: w.y }); }
+      if (w.workT > 0) break;
+      if (w.role === 'builder') {
+        for (const it of w.carry) { home.got[it] = (home.got[it] || 0) + 1; if (home.tr[it]) home.tr[it]--; }
+        w.carry = []; w.st = 'idle'; w.wait = 0.2; lodgeCheck(home);
+        break;
+      }
+      const R = RECIPE[w.role], n = w.carry.length / R.per, out = R.out(w.target);
+      w.carry = []; for (let k = 0; k < n; k++) w.carry.push(out);
+      S.stats.made[R.kind] += n;
+      goDrop(w, yard()); w.note = 'Carrying ' + ITEMS[out].name.toLowerCase() + ' to the yard';
+      break;
+    }
   }
 }
-function hire(cabinId, role) {
-  const home = W.bById.get(cabinId);
-  if (!home || crewOf(cabinId).length >= BUILD.cabin.beds) return null;
+function hire(homeId, role) {
+  const home = W.bById.get(homeId);
+  if (!home || !(BUILD[home.type].roles || []).includes(role) || crewOf(homeId).length >= bedsOf(home)) return null;
   const cost = hireCost(role, countRole(role));
   if (S.coins < cost) return null;
   S.coins -= cost;
   const d = bDoor(home), used = new Set(S.workers.map(w => w.name));
-  const free = NAMES.filter(n => !used.has(n));
-  const w = { id: S.nextId++, role, home: cabinId, name: (free.length ? free : NAMES)[(Math.random() * (free.length || NAMES.length)) | 0], col: (Math.random() * 6) | 0, x: d.x, y: d.y, face: 1 };
-  S.workers.push(w);
-  Object.assign(w, { st: 'idle', path: [], wait: 0.6, target: -1, carry: [], res: 0, swing: 0, walkT: 0, moving: false, note: 'Just arrived' });
+  const free = NAMES.filter(n => !used.has(n)), pool = free.length ? free : NAMES;
+  const w = { id: S.nextId++, role, home: homeId, name: pool[(Math.random() * pool.length) | 0], col: (Math.random() * 6) | 0, gait: (Math.random() * GAITS.length) | 0, x: d.x, y: d.y, face: 1, carry: [] };
+  S.workers.push(w); resetWorker(w); w.wait = 0.6; w.note = 'Just arrived';
   EV.push({ t: 'hire', x: d.x, y: d.y, w });
   return w;
 }
@@ -408,38 +584,69 @@ function dismiss(id) {
   for (const t of w.carry) S.inv[t]++;       // whatever they were carrying isn't lost
   S.workers.splice(k, 1);
 }
+function buyForeman(id) {
+  const b = W.bById.get(id); if (!b || b.type !== 'cabin' || b.foreman) return false;
+  const c = foremanCost(countForemen()); if (S.coins < c) return false;
+  S.coins -= c; b.foreman = true;
+  const d = bDoor(b); EV.push({ t: 'hire', x: d.x, y: d.y });
+  return true;
+}
+function setWood(id, t) { const b = W.bById.get(id); if (!b) return; b.wood = t; for (const w of crewOf(id)) if (w.st === 'idle' || w.st === 'home') w.wait = 0; }
 
-// ---------------------------------------------------------------- building and upgrades
-function canPlace(type, tx, ty) {
+// ---------------------------------------------------------------- building, moving and upgrades
+const unlocked = type => { const nd = BUILD[type].need; return !nd || goalValue(nd[0]) >= nd[1]; };
+// self: the building being moved, whose own footprint counts as free
+function canPlace(type, tx, ty, self) {
   const B = BUILD[type];
+  const mine = (x, y) => self && x >= self.x && x < self.x + B.w && y >= self.y && y < self.y + B.h;
   for (let yy = 0; yy < B.h; yy++) for (let xx = 0; xx < B.w; xx++) {
     const x = tx + xx, y = ty + yy;
     if (x < 2 || y < 4 || x >= MW - 2 || y >= MH - 3) return false;
     const i = idx(x, y);
-    if (W.block[i] || W.pileAt.has(i) || (W.kind[i] && W.g[i] >= 0.45)) return false;
+    if (W.ter[i] || (W.block[i] && !mine(x, y)) || W.pileAt.has(i) || (W.kind[i] && W.g[i] >= 0.45)) return false;
   }
   // leave room around other buildings so roofs never cover a door or the yard's front
   for (const b of S.buildings) {
+    if (b === self) continue;
     const O = BUILD[b.type], front = b.type === 'yard' ? 3 : 2;
     if (tx < b.x + O.w + 1 && tx + B.w > b.x - 1 && ty < b.y + O.h + front && ty + B.h > b.y - 2) return false;
   }
-  return !W.block[idx(tx + 1, ty + B.h)];
+  const dx = tx + Math.floor(doorCol(type)), dy = ty + B.h;
+  return !W.ter[idx(dx, dy)] && (!W.block[idx(dx, dy)] || mine(dx, dy));
 }
-function placeCabin(tx, ty) {
-  const cost = cabinCost(cabins().length);
-  if (!canPlace('cabin', tx, ty) || !canAfford(cost)) return null;
-  pay(cost);
-  const b = { id: S.nextId++, type: 'cabin', x: tx, y: ty };
-  S.buildings.push(b); rebuildBlocks();
-  // anyone standing where the cabin went steps out to its door
+function stepOut(b) {      // anyone standing where a building now is steps out to its door
   const d = bDoor(b);
   for (const e of [S.player].concat(S.workers)) if (blockedPx(e.x, e.y)) {
     const dest = e.path.length ? e.path[e.path.length - 1] : null;
     e.x = d.x + (Math.random() - 0.5) * 16; e.y = d.y + Math.random() * 6;
     if (dest) goTo(e, dest.x, dest.y);
   }
+}
+const buildCost = type => BUILD[type].cost(countB(type));
+function placeBuilding(type, tx, ty) {
+  const B = BUILD[type], cost = buildCost(type);
+  if (!unlocked(type) || (B.unique && countB(type)) || !canPlace(type, tx, ty) || !canAfford(cost)) return null;
+  pay(cost);
+  const b = { id: S.nextId++, type, x: tx, y: ty, wood: -1 };
+  if (type === 'depot') b.store = new Array(NI).fill(0);
+  if (type === 'lodge') { b.got = {}; b.tr = {}; }
+  S.buildings.push(b); rebuildBlocks(); stepOut(b);
   const c = bBase(b); EV.push({ t: 'build', x: c.x, y: c.y, b });
   return b;
+}
+function moveBuilding(id, tx, ty) {
+  const b = W.bById.get(id);
+  if (!b || b.type === 'yard' || !canPlace(b.type, tx, ty, b)) return false;
+  const B = BUILD[b.type];
+  // the old site goes back to forest: stumps where trees once stood
+  for (let yy = 0; yy < B.h; yy++) for (let xx = 0; xx < B.w; xx++) {
+    const i = idx(b.x + xx, b.y + yy);
+    if (W.orig[i] && !W.ter[i]) { W.kind[i] = W.orig[i]; W.g[i] = 0; W.growing.add(i); W.dirty.push(i); }
+  }
+  b.x = tx; b.y = ty; rebuildBlocks(); stepOut(b);
+  for (const w of crewOf(id)) { releaseWorker(w); w.res = 0; w.target = -1; w.st = 'idle'; w.path = []; w.wait = 0.4 + Math.random(); w.note = 'Moving house'; }
+  const c = bBase(b); EV.push({ t: 'build', x: c.x, y: c.y, b });
+  return true;
 }
 function axeCost(crew) {
   const lv = S[crew ? 'crewAxe' : 'axe']; if (lv >= MAX_AXE) return null;
@@ -452,8 +659,72 @@ function buyAxe(crew) {
 }
 function buyUpg(k) {
   if (S[k] >= UPG[k].max) return false;
-  const c = upgCost(k, S[k]); if (S.coins < c) return false;
-  S.coins -= c; S[k]++; return true;
+  const c = upgCost(k, S[k]); if (!canAfford(c)) return false;
+  pay(c); S[k]++; return true;
+}
+
+// ---------------------------------------------------------------- the Great Lodge
+const lodge = () => S.buildings.find(b => b.type === 'lodge');
+const lodgeStep = () => LODGE[S.lodgeStage] ? LODGE[S.lodgeStage].steps[S.lodgeStep] : null;
+// the next thing a builder could fetch right now: an item index, or -1
+function lodgeWants(b) {
+  const st = lodgeStep(); if (!st) return -1;
+  for (const [it, n] of st.need) if (S.inv[it] > 0 && (b.got[it] || 0) + (b.tr[it] || 0) < n) return it;
+  return -1;
+}
+function lodgePay() {
+  const b = lodge(), st = lodgeStep(); if (!b || !st) return 0;
+  const have = b.got.coins || 0, g = Math.min(S.coins, st.coins - have);
+  if (g > 0) { S.coins -= g; b.got.coins = have + g; lodgeCheck(b); }
+  return Math.max(0, g);
+}
+function lodgeCheck(b) {
+  const st = lodgeStep(); if (!st) return;
+  if (!st.need.every(([it, n]) => (b.got[it] || 0) >= n) || (b.got.coins || 0) < st.coins) return;
+  const c = bBase(b), storey = S.lodgeStage, name = st.name;
+  b.got = {}; b.tr = {}; S.lodgeStep++;
+  if (S.lodgeStep >= LODGE[storey].steps.length) {
+    S.lodgeStep = 0; S.lodgeStage++;
+    EV.push({ t: 'lodge', stage: S.lodgeStage, x: c.x, y: c.y });
+    if (S.lodgeStage >= LODGE.length) S.won = true;
+  } else EV.push({ t: 'lodgeStep', name, next: lodgeStep().name, x: c.x, y: c.y });
+}
+
+// ---------------------------------------------------------------- orders and standing
+const ordersOpen = () => S.stats.sales >= 60;
+const rankOf = () => { let r = 0; while (r < RANKS.length - 1 && S.stats.orders >= RANKS[r + 1].n) r++; return r; };
+const rankPerks = kind => { let n = 0; for (let r = 1; r <= rankOf(); r++) if (RANKS[r].perk === kind) n++; return n; };
+const maxOrders = () => 3 + rankPerks('slot');
+function newOrder() {
+  const pool = [];
+  for (let it = 0; it < NI; it++) if (S.seen[it] && !S.orders.some(o => o.item === it)) pool.push(it);
+  if (!pool.length) return;
+  pool.sort((a, b) => ITEMS[a].price - ITEMS[b].price);
+  const it = pool[Math.min(pool.length - 1, Math.floor(Math.pow(Math.random(), 0.6) * pool.length))];
+  const value = Math.max(40, S.stats.earned * 0.004) * (0.5 + Math.random());
+  const n = clamp(Math.round(value / ITEMS[it].price), 4, 600);
+  S.orders.push({ id: S.nextId++, item: it, n, pay: Math.round(n * ITEMS[it].price * (1.7 + Math.random() * 0.7) * (1 + 0.1 * rankPerks('pay'))), t: 600 + Math.random() * 300 });
+  EV.push({ t: 'order' });
+}
+function fillOrder(id) {
+  const k = S.orders.findIndex(o => o.id === id); if (k < 0) return false;
+  const o = S.orders[k]; if (S.inv[o.item] < o.n) return false;
+  const before = rankOf();
+  S.inv[o.item] -= o.n; S.sold[o.item] += o.n; S.coins += o.pay; S.stats.earned += o.pay; S.stats.sales += o.n; S.stats.orders++;
+  S.orders.splice(k, 1); S.orderT = Math.min(S.orderT, 45);
+  const r = rankOf();
+  if (r > before) {
+    let hat = null;
+    if (RANKS[r].perk === 'hat') { const pool = HATS.filter(h => !S.hats.includes(h.id)); if (pool.length) { hat = pool[(Math.random() * pool.length) | 0]; S.hats.push(hat.id); } }
+    EV.push({ t: 'rank', rank: r, hat });
+  }
+  return true;
+}
+function tickOrders(dt) {
+  for (let k = S.orders.length - 1; k >= 0; k--) { S.orders[k].t -= dt; if (S.orders[k].t <= 0) S.orders.splice(k, 1); }
+  if (!ordersOpen()) return;
+  S.orderT -= dt;
+  if (S.orderT <= 0) { S.orderT = (140 + Math.random() * 140) * (rankPerks('fast') ? 0.6 : 1); if (S.orders.length < maxOrders()) newOrder(); }
 }
 
 // ---------------------------------------------------------------- goals
@@ -462,19 +733,25 @@ function goalValue(key) {
     case 'chopped': return S.stats.chopped;
     case 'delivered': return S.stats.delivered;
     case 'sales': return S.stats.sales;
-    case 'cabins': return cabins().length;
-    case 'jacks': return countRole('jack');
-    case 'haulers': return countRole('hauler');
+    case 'cabins': return countB('cabin');
     case 'workers': return S.workers.length;
-    case 'axe': return S.axe;
+    case 'axe': return Math.max(S.axe, S.crewAxe);        // forging either yours or the crew's counts
+    case 'orders': return S.stats.orders;
+    case 'hats': return S.hats.length;
+    case 'lodge': return S.lodgeStage;
+    case 'foremen': return countForemen();
   }
-  return key.startsWith('sold') ? S.sold[+key.slice(4)] : 0;
+  if (key.startsWith('sold')) return S.sold[+key.slice(4)];
+  if (key.startsWith('b:')) return countB(key.slice(2));
+  if (key.startsWith('r:')) return countRole(key.slice(2));
+  if (key.startsWith('made:')) return S.stats.made[key.slice(5)] || 0;
+  return 0;
 }
+const curGoal = () => GOALS.find(g => !S.goalsDone[g.id]);
 function checkGoal() {
-  const g = GOALS[S.goal]; if (!g) return;
+  const g = curGoal(); if (!g) return;
   if (goalValue(g.key) < g.n) return;
-  S.coins += g.r; S.stats.earned += g.r; S.goal++;
-  if (g.win) S.won = true;
+  S.coins += g.r; S.stats.earned += g.r; S.goalsDone[g.id] = 1;
   EV.push({ t: 'goal', g });
 }
 
@@ -491,8 +768,9 @@ function update(dt) {
     for (const i of W.growing) {
       if (W.pileAt.has(i)) continue;          // a stump under a log pile waits
       const g = W.g[i] + growAcc / TREES[W.kind[i] - 1].regrow;
-      if (g >= 1) { W.g[i] = 1; W.growing.delete(i); } else W.g[i] = g;
+      if (g >= 1) { setGrow(i, 1); W.growing.delete(i); } else setGrow(i, g);
     }
+    tickOrders(growAcc);
     growAcc = 0;
   }
   goalAcc += dt;
@@ -503,11 +781,11 @@ function update(dt) {
 function snapshot() {
   const grow = {}; for (const i of W.growing) grow[i] = Math.round(W.g[i] * 1000) / 1000;
   const P = S.player, inv = S.inv.slice();
-  for (const w of S.workers) for (const t of w.carry) inv[t]++;      // logs in transit are banked
+  for (const w of S.workers) for (const t of w.carry) inv[t]++;      // goods in transit are banked
   return Object.assign({}, S, {
     inv, grow, savedAt: Date.now(),
     player: { x: Math.round(P.x), y: Math.round(P.y), face: P.face, carry: P.carry.slice() },
-    workers: S.workers.map(w => ({ id: w.id, role: w.role, home: w.home, name: w.name, col: w.col, x: Math.round(w.x), y: Math.round(w.y), face: w.face })),
+    workers: S.workers.map(w => ({ id: w.id, role: w.role, home: w.home, name: w.name, col: w.col, gait: w.gait, x: Math.round(w.x), y: Math.round(w.y), face: w.face })),
     piles: S.piles.map(p => ({ id: p.id, i: p.i, type: p.type, n: p.n })),
   });
 }
@@ -532,16 +810,32 @@ function readSlot(slot) {
 }
 function loadGame(slot) {
   const d = readSlot(slot); if (!d) return false;
-  const base = blankState(slot, d.seed);
-  S = Object.assign(base, d, { slot, stats: Object.assign(base.stats, d.stats) });
-  for (const k of ['inv', 'sold', 'seen', 'autosell']) { S[k] = (S[k] || []).slice(0, NT); while (S[k].length < NT) S[k].push(0); }
+  const base = blankState(slot, d.seed), old = (d.v || 1) < 2;
+  const stats = Object.assign(base.stats, d.stats);
+  stats.made = Object.assign({ plank: 0, furn: 0, char: 0 }, stats.made);
+  S = Object.assign(base, d, { slot, stats, v: 2 });
+  for (const k of ['inv', 'sold', 'seen', 'autosell', 'keep']) { S[k] = (S[k] || []).slice(0, NI).map(v => +v || 0); while (S[k].length < NI) S[k].push(0); }
   while (S.stats.cut.length < NT) S.stats.cut.push(0);
+  if (old) {
+    // v1.0 saves counted goals by position; carry over the ones already done
+    S.goalsDone = {};
+    for (let k = 0; k < Math.min(d.goal || 0, OLD_GOALS.length); k++) S.goalsDone[OLD_GOALS[k]] = 1;
+    S.won = false; S.gait = (Math.random() * GAITS.length) | 0;
+  }
+  delete S.goal;
+  S.hats = (S.hats || []).filter(id => HATS.some(h => h.id === id));
+  for (const b of S.buildings) {
+    if (b.wood == null) b.wood = -1;
+    if (b.type === 'depot') { b.store = (b.store || []).slice(0, NI); while (b.store.length < NI) b.store.push(0); }
+    if (b.type === 'lodge') { b.got = b.got || {}; b.tr = {}; }
+  }
+  S.buildings = S.buildings.filter(b => BUILD[b.type]);
   genMap(S.seed);
   for (const k in (d.grow || {})) { const i = +k; if (W.kind[i]) { W.g[i] = d.grow[k]; W.growing.add(i); } }
   delete S.grow;
   S.piles = (S.piles || []).filter(p => W.kind[p.i]);
-  rebuildBlocks();
-  S.workers = S.workers.filter(w => W.bById.has(w.home));
+  rebuildBlocks(); W.dirty.length = 0;
+  S.workers = S.workers.filter(w => W.bById.has(w.home) && ROLES[w.role]);
   resetTransient();
   return true;
 }

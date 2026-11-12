@@ -6,7 +6,7 @@ const DEV_SPEED = DEV ? +DEV[1] : 1;
 let lastFrame = 0, acc = 0, autosaveT = 0, running = true, fpsT = 0, fpsN = 0, titleT = 0;
 
 function startGame(slot, fresh) {
-  closeModal(); closePanel(); if (UI.mode) endPlace();
+  closeModal(); closePanel(); if (UI.place) endPlace();
   if (fresh || !loadGame(slot)) newGame(slot);
   SET.lastSlot = slot; saveSettings();
   UI.inGame = true; UI.paused = false;
@@ -20,7 +20,7 @@ function startGame(slot, fresh) {
     <div class="btns"><button class="btn green" data-a="ok">Let's chop</button></div>`, () => closeModal());
 }
 function toTitle() {
-  UI.inGame = false; closePanel(); if (UI.mode) endPlace();
+  UI.inGame = false; closePanel(); if (UI.place) endPlace();
   $('hud').classList.add('hidden'); $('title').classList.remove('hidden'); $('ver').classList.remove('hidden');
   demoWorld();
   buildTitleMenu();
@@ -29,13 +29,12 @@ function toTitle() {
 function demoWorld() {
   newGame(-1);
   R.reset(); EV.length = 0;
-  S.coins = 1e6; S.crewAxe = 2;
-  for (const [x, y, crew] of [[CX - 9, CY + 2, ['jack', 'jack', 'hauler']], [CX + 6, CY - 6, ['jack', 'hauler', 'hauler']]]) {
-    const b = { id: S.nextId++, type: 'cabin', x, y };
+  S.coins = 1e7; S.crewAxe = 2; S.inv[0] = 40; S.inv[1] = 12;
+  for (const [type, x, y, crew] of [['cabin', CX - 9, CY + 2, ['jack', 'jack', 'hauler']], ['cabin', CX + 6, CY - 6, ['jack', 'hauler', 'hauler']], ['sawmill', CX + 5, CY + 3, ['sawyer']], ['forester', CX - 8, CY - 5, ['forester']]]) {
+    const b = { id: S.nextId++, type, x, y, wood: -1 };
     S.buildings.push(b); rebuildBlocks();
     for (const role of crew) hire(b.id, role);
   }
-  S.inv[0] = 9; S.inv[1] = 5;
   R.follow = false; R.cam.x = YARD_X; R.cam.y = YARD_Y + 6; R.k = R.kT = R.defaultK(); R.anchor = null;
 }
 
