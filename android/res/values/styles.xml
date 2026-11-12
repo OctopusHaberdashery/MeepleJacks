@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="meadow">#1F3A26</color>
+    <style name="MeepleTheme" parent="@android:style/Theme.Material.NoActionBar.Fullscreen">
+        <item name="android:windowBackground">@color/meadow</item>
+        <item name="android:statusBarColor">@color/meadow</item>
+        <item name="android:navigationBarColor">@color/meadow</item>
+    </style>
+</resources>

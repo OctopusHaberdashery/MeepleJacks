@@ -1,0 +1,11 @@
+# Signing key: never publish. Anyone with it could sign updates as you.
+*.keystore
+*.jks
+
+# Build outputs (the APK is attached to GitHub Releases instead)
+android/build/
+*.apk
+*.idsig
+
+# Local signing password, read by build.sh
+android/signing.env
