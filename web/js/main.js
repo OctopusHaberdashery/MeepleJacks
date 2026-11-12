@@ -80,6 +80,7 @@ async function boot() {
   const bar = p => { const el = $('loading'); if (el && el.firstChild) el.firstChild.textContent = 'Sharpening axes… ' + Math.round(p * 100) + '%'; };
   stage('boot start');
   loadSettings(); stage('settings');
+  try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) { }      // ask the browser not to clear saves
   await buildArtAsync(p => bar(p * 0.95)); stage('art built');
   R.init($('game')); stage('renderer ' + R.W + 'x' + R.H);
   setupInput(); stage('input');

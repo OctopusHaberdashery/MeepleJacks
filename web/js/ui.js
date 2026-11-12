@@ -144,7 +144,7 @@ function sellCard(it) {
   return `<div class="card"><div class="row">${ico('it' + it, 'lg')}<div class="grow"><div class="t">${ITEMS[it].name} <span class="s">× ${fmt(n)}</span></div><div class="s">${ico('coin', 'sm')}${fmt(ITEMS[it].price)} each</div></div>
     <button class="btn sm" data-a="sell" data-v="${it}|10" ${sp ? '' : 'disabled'}>Sell 10</button><button class="btn sm gold" data-a="sell" data-v="${it}|all" ${sp ? '' : 'disabled'}>All</button></div>
     <div class="row" style="margin-top:.4rem"><span class="s">Auto-sell</span><div class="toggle"><button class="${S.autosell[it] ? 'on' : ''}" data-a="auto" data-v="${it}|1">On</button><button class="${S.autosell[it] ? '' : 'on'}" data-a="auto" data-v="${it}|0">Off</button></div>
-    <span class="s grow" style="text-align:right">Hold back</span><div class="toggle"><button data-a="keep" data-v="${it}|-1">−</button><button class="mid" disabled>${fmt(k)}</button><button data-a="keep" data-v="${it}|1">+</button></div></div></div>`;
+    <span class="s grow" style="text-align:right">Keep</span><div class="toggle"><button data-a="keep" data-v="${it}|-1">−</button><button class="mid" disabled>${fmt(k)}</button><button data-a="keep" data-v="${it}|1">+</button></div></div></div>`;
 }
 const PANELS = {
   yard() {
@@ -155,7 +155,7 @@ const PANELS = {
     let b = '';
     if (UI.tab === 'sell') {
       let total = 0; for (let it = 0; it < NI; it++) total += spare(it) * ITEMS[it].price;
-      b += `<button class="btn gold wide" data-a="sellall" ${total ? '' : 'disabled'}>Sell everything spare ${ico('coin', 'sm')}${fmt(total)}</button><p class="s">“Hold back” keeps that many in the yard: they aren't sold, sawn or burned, so they are there for building, orders and the Lodge.</p>`;
+      b += `<button class="btn gold wide" data-a="sellall" ${total ? '' : 'disabled'}>Sell everything spare ${ico('coin', 'sm')}${fmt(total)}</button><p class="s">“Keep” holds that many back in the yard: they aren't sold, sawn or burned, so they are there for building, orders and the Lodge.</p>`;
       for (const [title, from, to] of [['Logs', 0, NT], ['Planks', NT, 2 * NT], ['Furniture and charcoal', 2 * NT, NI]]) {
         let sec = '';
         for (let it = from; it < to; it++) if (S.seen[it]) sec += sellCard(it);
@@ -430,7 +430,7 @@ function setupInput() {
     wheelAcc += e.deltaY;
     if (Math.abs(wheelAcc) >= 50) { R.follow = false; R.zoomBy(wheelAcc < 0 ? 1 : -1, e.clientX, e.clientY); wheelAcc = 0; }
   }, { passive: false });
-  document.addEventListener('pointerdown', () => AUDIO.unlock(), { capture: true });
+  for (const ev of ['pointerdown', 'pointerup', 'touchend', 'click']) document.addEventListener(ev, () => AUDIO.unlock(), { capture: true });
   window.addEventListener('keydown', e => { if (e.key === 'Escape') handleBack(); });
 
   // DOM buttons
@@ -527,6 +527,13 @@ function buildTitleMenu() {
   };
   $('logoMeeples').innerHTML = `<img class="t" src="${ART.url.tree0}"><img src="${meepleURL('jack', 0, 'viking')}"><img src="${meepleURL('player', 0)}"><img src="${meepleURL('hauler', 0)}"><img src="${meepleURL('sawyer', 0, 'party')}"><img class="t" src="${ART.url.tree3}">`;
   $('ver').textContent = 'v' + VERSION;
+  // in Safari on an iPhone or iPad, say how to put the game on the home screen
+  const ios = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  let tip = $('installTip');
+  if (ios && !navigator.standalone && location.protocol === 'https:') {
+    if (!tip) { tip = document.createElement('div'); tip.id = 'installTip'; tip.className = 'install'; $('title').appendChild(tip); }
+    tip.textContent = 'To install: tap Share, then “Add to Home Screen”. It then opens full screen and works offline.';
+  } else if (tip) tip.remove();
 }
 function openPause() {
   UI.paused = true;
@@ -571,7 +578,7 @@ function openHelp(fromPause) {
   modal(`<h2>How to Play</h2><div style="text-align:left" class="p">
     <p>${ico('player', 'sm')} <b>Tap a tree</b> and your Meeple walks over and chops it down. Tap more trees to line them up (tap again to cancel one).</p>
     <p>${ico('log0', 'sm')} Felled trees leave a <b>log pile</b>. Your Meeple carries its own piles to the <b>Lumber Yard</b>; tap any other pile to fetch it.</p>
-    <p>${ico('coin', 'sm')} Tap the yard to <b>sell</b>. <b>Hold back</b> what you want kept for building, orders and the Lodge.</p>
+    <p>${ico('coin', 'sm')} Tap the yard to <b>sell</b>. Set <b>Keep</b> on anything you want held back for building, orders and the Lodge.</p>
     <p>${ico('cabin', 'sm')} <b>Lumberjacks</b> cut the nearest trees to their cabin, however far that is. <b>Haulers</b> carry the piles in. Tap a cabin to hire, to pick <b>one kind of wood</b> for it, or to <b>move</b> it for free.</p>
     <p>${ico('axe2', 'sm')} The forest grows in rings. Pine by the yard is soft and cheap. Birch, Oak, Maple, Cherry, Redwood and Ebony each lie farther out, take a better <b>axe</b>, and sell for more.</p>
     <p>${ico('forester', 'sm')} <b>Foresters</b> replant stumps. ${ico('sawyer', 'sm')} <b>Sawyers</b> saw logs into planks. ${ico('collier', 'sm')} <b>Colliers</b> burn cheap logs into charcoal. ${ico('carpenter', 'sm')} <b>Carpenters</b> build furniture. ${ico('carter', 'sm')} <b>Carters</b> wheel loads home from a Log Depot. Each needs its own building.</p>

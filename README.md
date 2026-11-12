@@ -1,6 +1,6 @@
 # MeepleJacks
 
-**[⬇ Download the latest APK](https://github.com/OctopusHaberdashery/MeepleJacks/releases/latest/download/MeepleJacks.apk)** · [All releases](https://github.com/OctopusHaberdashery/MeepleJacks/releases)
+**[▶ Play in your browser](https://octopushaberdashery.github.io/MeepleJacks/)** (installs to an iPhone or iPad home screen) · **[⬇ Android APK](https://github.com/OctopusHaberdashery/MeepleJacks/releases/latest/download/MeepleJacks.apk)** · [All releases](https://github.com/OctopusHaberdashery/MeepleJacks/releases)
 
 <img src="icon-512.png" width="128" alt="MeepleJacks icon">
 
@@ -59,6 +59,15 @@ The camp only works while the game is open on screen. There is no offline progre
 
 Updates install over the old version and keep your saves.
 
+## Install on an iPhone or iPad
+
+1. Open **https://octopushaberdashery.github.io/MeepleJacks/** in Safari.
+2. Tap **Share**, then **Add to Home Screen**.
+3. Open MeepleJacks from the home screen. It runs full screen and works without a connection.
+
+Saves stay on the device you play on; the phone and the tablet each keep their own camps. When a new version is
+published, opening the game while online picks it up.
+
 ## Layout
 
 - `web/`: the game itself (HTML5 canvas, plain JavaScript, no dependencies)
@@ -70,6 +79,7 @@ Updates install over the old version and keep your saves.
   - `js/ui.js`, `js/audio.js`, `js/main.js`
   - `dev/bot.js`: an autoplayer for measuring how long the game takes. Not included in the APK.
 - `android/`: WebView wrapper (`MainActivity.java`), manifest, icons, `build.sh`
+- `pwa/`: the installable web app: manifest, icons, service worker, `build.py` and `publish.sh`
 
 ## Building
 
@@ -82,6 +92,9 @@ VERSION_CODE=2 VERSION_NAME=1.1 bash android/build.sh
 ```
 
 The signing keystore and its password (`android/signing.env`) are git-ignored and must be kept to ship updates.
+
+The web app is the same single page plus a manifest and a service worker. `bash pwa/publish.sh` builds it and
+replaces the `gh-pages` branch, which GitHub Pages serves.
 
 To play in a desktop browser, serve `web/` with any static server (add `?dev=4` to run time four times faster).
 To time a full playthrough, open the title screen, load `dev/bot.js` and run `runBot()` in the console.

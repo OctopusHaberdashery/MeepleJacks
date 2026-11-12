@@ -9,3 +9,6 @@ android/build/
 
 # Local signing password, read by build.sh
 android/signing.env
+
+# Built web app (published to the gh-pages branch instead)
+pwa/build/
