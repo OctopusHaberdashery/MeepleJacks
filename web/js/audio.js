@@ -7,10 +7,36 @@ const AUDIO = {
   started: false, nextBeat: 0, step: 0, lastSfx: {},
 };
 
+// Called from every finished tap, click and key press. Phones only let sound start from inside one of
+// those, and can stop it again at any time (a call, the app switcher, the lock screen), so this
+// keeps checking instead of running once.
 AUDIO.unlock = function () {
-  if (AUDIO.ctx) { if (AUDIO.ctx.state === 'suspended' && !AUDIO.paused) AUDIO.ctx.resume(); return; }
+  if (AUDIO.paused) return;
+  // iPhone and iPad: play as media rather than as a ring sound, which the silent switch would mute
+  try { const s = navigator.audioSession; if (s && s.type !== 'playback') s.type = 'playback'; } catch (e) { }
+  try {
+    if (!AUDIO.ctx && (AUDIO.fails || 0) < 3) AUDIO.create();
+    const c = AUDIO.ctx; if (!c) return;
+    // 'suspended' or, on iOS, 'interrupted'
+    if (c.state !== 'running') { const p = c.resume(); if (p && p.catch) p.catch(() => { }); }
+    // older iOS stays silent until something has been played from inside a tap
+    if (!AUDIO.primed) {
+      const s = c.createBufferSource(); s.buffer = c.createBuffer(1, 1, c.sampleRate); s.connect(c.destination); s.start(0);
+      AUDIO.primed = c.state === 'running';
+    }
+  } catch (e) { AUDIO.err = String((e && e.message) || e); }
+};
+AUDIO.create = function () {
   const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
-  const c = AUDIO.ctx = new AC();
+  let c = null;
+  try { c = AUDIO.ctx = new AC(); AUDIO.build(c); AUDIO.err = null; }
+  catch (e) {
+    AUDIO.ctx = null; AUDIO.started = false;
+    AUDIO.fails = (AUDIO.fails || 0) + 1; AUDIO.err = String((e && e.message) || e);
+    try { if (c) c.close(); } catch (e2) { }
+  }
+};
+AUDIO.build = function (c) {
   AUDIO.master = c.createGain(); AUDIO.master.connect(c.destination);
   AUDIO.music = c.createGain(); AUDIO.music.connect(AUDIO.master);
   AUDIO.sfxBus = c.createGain(); AUDIO.sfxBus.connect(AUDIO.master);
@@ -24,6 +50,22 @@ AUDIO.unlock = function () {
   AUDIO.nextBeat = c.currentTime + 0.3;
   AUDIO.started = true;
 };
+// A plain sentence on what the sound engine is doing, for the sound check in Settings.
+AUDIO.status = function () {
+  if (!(window.AudioContext || window.webkitAudioContext)) return 'This browser has no sound engine.';
+  if (!AUDIO.ctx) return AUDIO.err ? 'Sound could not start: ' + AUDIO.err : 'Sound has not started yet. Tap the button.';
+  const c = AUDIO.ctx, ses = navigator.audioSession ? ', ' + navigator.audioSession.type : '';
+  const tech = ` (${c.state}, ${c.sampleRate} Hz${ses})`;
+  if (c.state !== 'running') return 'The device is holding the sound back' + tech + '. Tap the button again.';
+  if (AUDIO.vol.master < 0.05) return 'Sound is running, but Master is turned all the way down' + tech + '.';
+  return 'Sound is running' + tech + '. If you hear nothing, turn the volume up with the side buttons while the game is open.';
+};
+// Four rising notes straight to the master volume (so they sound even with Effects turned down).
+AUDIO.test = function () {
+  if (!AUDIO.started || AUDIO.ctx.state !== 'running') return;
+  const t = AUDIO.ctx.currentTime;
+  [392, 494, 587, 784].forEach((f, i) => tone(AUDIO.master, 'triangle', f, f * 1.01, t + i * 0.1, 0.35, 0.2));
+};
 AUDIO.applyVolume = function () {
   if (!AUDIO.ctx) return;
   const v = AUDIO.vol;
@@ -33,7 +75,11 @@ AUDIO.applyVolume = function () {
   AUDIO.amb.gain.value = v.amb * 0.6;
 };
 AUDIO.suspend = function () { AUDIO.paused = true; if (AUDIO.ctx && AUDIO.ctx.state === 'running') AUDIO.ctx.suspend(); };
-AUDIO.resume = function () { AUDIO.paused = false; if (AUDIO.ctx && AUDIO.ctx.state === 'suspended') AUDIO.ctx.resume(); };
+// Coming back to the game: this may be refused outside a tap (iOS), in which case the next tap does it.
+AUDIO.resume = function () {
+  AUDIO.paused = false;
+  try { if (AUDIO.ctx && AUDIO.ctx.state !== 'running') { const p = AUDIO.ctx.resume(); if (p && p.catch) p.catch(() => { }); } } catch (e) { }
+};
 
 function tone(dest, type, f0, f1, t, dur, peak, attack = 0.005, filter) {
   const c = AUDIO.ctx, o = c.createOscillator(), g = c.createGain();

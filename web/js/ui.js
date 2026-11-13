@@ -386,7 +386,6 @@ let pinch = null, dragMoved = false, downAt = 0, wheelAcc = 0;
 function setupInput() {
   const cv = R.cv;
   cv.addEventListener('pointerdown', e => {
-    AUDIO.unlock();
     try { cv.setPointerCapture(e.pointerId); } catch (err) { }
     PTR.set(e.pointerId, { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY });
     if (PTR.size === 1) { dragMoved = false; downAt = performance.now(); }
@@ -430,7 +429,8 @@ function setupInput() {
     wheelAcc += e.deltaY;
     if (Math.abs(wheelAcc) >= 50) { R.follow = false; R.zoomBy(wheelAcc < 0 ? 1 : -1, e.clientX, e.clientY); wheelAcc = 0; }
   }, { passive: false });
-  for (const ev of ['pointerdown', 'pointerup', 'touchend', 'click']) document.addEventListener(ev, () => AUDIO.unlock(), { capture: true });
+  // Sound may only start from a finished tap, click or key press (iOS does not count the press itself).
+  for (const ev of ['pointerup', 'touchend', 'click', 'keydown']) document.addEventListener(ev, () => AUDIO.unlock(), { capture: true });
   window.addEventListener('keydown', e => { if (e.key === 'Escape') handleBack(); });
 
   // DOM buttons
@@ -556,6 +556,8 @@ function openSettings(fromPause) {
   const back = () => { saveSettings(); if (fromPause) openPause(); else closeModal(); };
   const m = modal(`<h2>Settings</h2><div style="text-align:left">
     <div class="sec">Sound</div>${sl('master', 'Master')}${sl('music', 'Music')}${sl('sfx', 'Effects')}${sl('amb', 'Forest sounds')}
+    <div class="setrow"><span>Sound check</span><div class="toggle"><button data-a="testsound">Play test sound</button></div></div>
+    <p class="s" id="sndState">${esc(AUDIO.status())}</p>
     <div class="sec">Display</div>
     ${tg('uiScale', 'Button size', [[0.85, 'Small'], [1, 'Medium'], [1.15, 'Large'], [1.3, 'Huge']])}
     ${tg('fade', 'See through trees', [[true, 'On'], [false, 'Off']])}
@@ -569,6 +571,11 @@ function openSettings(fromPause) {
     if (a === 'set') { const [k, raw] = v.split('|'); SET[k] = JSON.parse(raw); saveSettings(); applySettings(); openSettings(fromPause); }
     else if (a === 'reset') { SET = Object.assign({}, SET_DEFAULT, { lastSlot: SET.lastSlot }); saveSettings(); applySettings(); openSettings(fromPause); }
     else if (a === 'done') back();
+    else if (a === 'testsound') {
+      AUDIO.unlock();
+      // the device takes a moment to let the sound through after the tap
+      setTimeout(() => { AUDIO.test(); const el = $('sndState'); if (el) el.textContent = AUDIO.status(); }, 250);
+    }
   }, back);
   m.oninput = e => { const k = e.target.dataset.k; if (k) { SET[k] = +e.target.value; applySettings(); } };
   m.onchange = e => { if (e.target.dataset.k) { saveSettings(); AUDIO.sfx('pick'); } };
