@@ -34,7 +34,7 @@ const RIVER_NAMES = ['', 'First', 'Second', 'Third', 'Fourth', 'Fifth', 'Sixth']
 // One Ancient tree stands in each ring. It takes hp axe damage to fell (bring the crew).
 const ANCIENT_HP = [1000, 2800, 6000, 12000, 22000, 36000, 60000];
 // The timbers the Ancient tree of ring r leaves, which is what the bridge over the river beyond it takes.
-const ANCIENT_TIMBER = [60, 100, 150, 210, 280, 360];
+const ANCIENT_TIMBER = [60, 120, 240, 420, 700, 1000];
 const ANCIENT_LOGS = 100;      // the last Ancient tree has no river beyond it: it leaves ordinary logs
 const BRIDGE_TIME = 1.5;       // seconds to hammer one timber into a bridge
 const ANCIENT_CREW = 12;       // how many lumberjacks can swing at one at once
