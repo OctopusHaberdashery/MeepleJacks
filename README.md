@@ -37,6 +37,11 @@ You start with a rusty hatchet and a Lumber Yard in the middle of a big forest.
   tree falls (or later, from the stump or the crossing) and they carry the timbers over and hammer them in, plank
   by plank. They haul no logs while they are at it, and you can carry timbers yourself. Once it is finished, move a
   cabin across so its lumberjacks are close to the new wood.
+- **Another bridge.** Once a river has that first bridge, more can be bought under Build and put wherever you
+  like along it, to shorten the crew's walks. Each extra one over the same river costs twice the coins.
+- **Clearings.** Build ➜ Clearing lets you drag out a patch of ground (or tap for one the size the Great Lodge
+  needs) that is kept clear of trees. Stumps and saplings go at once, lumberjacks from cabins within 30 tiles fell
+  what is standing before anything else, and nothing grows back. Tap a clearing while marking to let it go.
 - **Work the wood.** Later buildings bring new kinds of Meeple:
 
   | Building | Meeple | What they do |
@@ -114,7 +119,7 @@ build-tools and platform jar, and inlines every script into one page (`android/b
 refuse to load separate local files.
 
 ```bash
-VERSION_CODE=3 VERSION_NAME=1.2 bash android/build.sh
+VERSION_CODE=4 VERSION_NAME=1.3 bash android/build.sh
 ```
 
 The signing keystore and its password (`android/signing.env`) are git-ignored and must be kept to ship updates.

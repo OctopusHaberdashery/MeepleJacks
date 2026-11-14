@@ -13,6 +13,7 @@ const R = window.R = {
   frame: 0, t: 0, parts: [], floats: [], falls: [], marks: [],
   ghost: null, radiusOf: null, ready: false, fade: true, smokeT: 0, stockKey: '', stock: [],
   season: 0,       // the season the ground and trees are drawn in; follows SEA
+  draft: null,     // a clearing being dragged out: { x0, y0, x1, y1 } in tiles
 };
 
 R.init = function (cv) {
@@ -59,7 +60,7 @@ R.zoomBy = function (steps, sx, sy) {
 R.reset = function () {
   R.parts = []; R.floats = []; R.falls = []; R.marks = []; R.chunks.clear(); R.ghost = null; R.radiusOf = null; R.stockKey = '';
   for (const q of [2, 4]) { R.far[q].g.clear(); R.far[q].t.clear(); }
-  R.season = S ? SEA : 0;
+  R.season = S ? SEA : 0; R.draft = null;
 };
 // the season has turned: everything cached is redrawn a little at a time, the old picture standing in until then
 R.turnSeason = function (sn) {
@@ -405,6 +406,12 @@ function drawEnt(ctx, e) {
     drawSpr(ctx, ART.pile[e.heap][6], h.x - 7, h.y - 1); drawSpr(ctx, ART.pile[e.heap][n > 40 ? 6 : n > 12 ? 5 : 3], h.x + 7, h.y + 2);
     if (R.q === 1) drawNum(ctx, '' + n, h.x + 1, h.y - 24, '#fff4d0');
   }
+  else if (e.ghost && e.ghost.bridge) {
+    const b = e.ghost.bridge, a = bridgeArt(b).deck;
+    ctx.fillStyle = b.ok ? 'rgba(120,255,120,0.35)' : 'rgba(255,80,60,0.45)';
+    ctx.fillRect(b.x * TS - 2, b.y * TS - 2, b.w * TS + 4, b.h * TS + 4);
+    ctx.globalAlpha = 0.85; ctx.drawImage(a.c, b.x * TS - a.ax, b.y * TS - a.ay); ctx.globalAlpha = 1;
+  }
   else if (e.ghost) {
     const gh = e.ghost, B = BUILD[gh.type], s = gh.type === 'lodge' ? ART.spr['lodge' + Math.min(S.lodgeStage, LODGE.length)] : ART.spr[gh.type];
     ctx.fillStyle = gh.ok ? 'rgba(120,255,120,0.35)' : 'rgba(255,80,60,0.45)';
@@ -470,6 +477,23 @@ R.draw = function (dt) {
 
   // ---- ground decals
   const seeRect = (x, y, w, h) => x < ox + bw + 8 && x + w > ox - 8 && y < oy + bh + 8 && y + h > oy - 8;
+  // clearings: bare earth inside a ring of little stakes
+  const marking = UI.place && UI.place.type === 'clear';
+  for (const c of S.clearings) {
+    const x = c.x * TS, y = c.y * TS, w = c.w * TS, h = c.h * TS; if (!seeRect(x, y, w, h)) continue;
+    ctx.fillStyle = marking ? 'rgba(255,236,170,0.45)' : 'rgba(150,112,62,0.26)'; ctx.fillRect(x, y, w, h);
+    if (q > 2) continue;
+    const post = (px, py) => { ctx.fillStyle = '#1c120c'; ctx.fillRect(px - 2, py - 4, 4, 6); ctx.fillStyle = '#c08a4e'; ctx.fillRect(px - 1, py - 3, 2, 4); ctx.fillStyle = '#f4e8c8'; ctx.fillRect(px - 1, py - 3, 2, 1); };
+    for (let px = x; px <= x + w; px += TS * (c.w > 8 ? 2 : 1)) { post(px, y); post(px, y + h); }
+    for (let py = y + TS; py < y + h; py += TS * (c.h > 8 ? 2 : 1)) { post(x, py); post(x + w, py); }
+    post(x + w, y); post(x + w, y + h);
+  }
+  if (R.draft) {
+    const d = R.draft, x = Math.min(d.x0, d.x1) * TS, y = Math.min(d.y0, d.y1) * TS, w = (Math.min(CLEAR_MAX, Math.abs(d.x1 - d.x0) + 1)) * TS, h = (Math.min(CLEAR_MAX, Math.abs(d.y1 - d.y0) + 1)) * TS;
+    ctx.fillStyle = 'rgba(255,248,208,0.4)'; ctx.fillRect(x, y, w, h);
+    ctx.fillStyle = '#fff8d0'; ctx.fillRect(x, y, w, q); ctx.fillRect(x, y + h - q, w, q); ctx.fillRect(x, y, q, h); ctx.fillRect(x + w - q, y, q, h);
+  }
+  for (const b of S.extra) if (seeRect(b.x * TS, b.y * TS, b.w * TS, b.h * TS)) drawSpan(ctx, b, 1, false);
   for (let k = 1; k < NT; k++) { const s = W.site[k]; if (seeRect(s.x * TS, s.y * TS, s.w * TS, s.h * TS)) drawSpan(ctx, s, spanFrac(k), false); }
   for (const b of S.buildings) { const base = bBase(b); if (inX(base.x) && inY(base.y)) drawSpr(ctx, apronOf(b), base.x, base.y - 6); }
   for (let i = R.marks.length - 1; i >= 0; i--) {
@@ -500,7 +524,8 @@ R.draw = function (dt) {
   for (let k = 1; k < NT; k++) { const s = W.site[k], f = spanFrac(k); if (!s.v && f > 0 && seeRect(s.x * TS, s.y * TS, s.w * TS, s.h * TS)) ents.push({ y: (s.y + s.h) * TS - 3, rail: s, frac: f }); }
   for (let r = 0; r < NT - 1; r++) if (S.anc[r].heap > 0) { const h = heapSpot(r); if (inX(h.x) && inY(h.y) && !R.falls.some(f => f.anc === r)) ents.push({ y: h.y + 2, heap: r }); }
   for (let r = 0; r < NT; r++) { const A = W.anc[r]; if (A.x > ox - 100 && A.x < ox + bw + 100 && A.y > oy - 20 && A.y < oy + bh + 240) ents.push({ y: A.y, anc: r }); }
-  if (R.ghost) ents.push({ y: (R.ghost.ty + BUILD[R.ghost.type].h) * TS - 1, ghost: R.ghost });
+  for (const b of S.extra) if (!b.v && seeRect(b.x * TS, b.y * TS, b.w * TS, b.h * TS)) ents.push({ y: (b.y + b.h) * TS - 3, rail: b, frac: 1 });
+  if (R.ghost) ents.push({ y: R.ghost.bridge ? (R.ghost.bridge.y + R.ghost.bridge.h) * TS + 4 : (R.ghost.ty + BUILD[R.ghost.type].h) * TS - 1, ghost: R.ghost });
   ents.sort((a, b) => a.y - b.y);
 
   if (q === 1) {
@@ -630,6 +655,7 @@ R.minimap = function () {
   g.putImageData(id, 0, 0);
   for (const b of S.buildings) { g.fillStyle = '#1c120c'; g.fillRect(b.x - 1, b.y - 1, BUILD[b.type].w + 2, BUILD[b.type].h + 2); g.fillStyle = b.type === 'yard' ? '#ffd84a' : b.type === 'cabin' ? '#ff7a5a' : b.type === 'lodge' ? '#e8a0ff' : '#ffffff'; g.fillRect(b.x, b.y, BUILD[b.type].w, BUILD[b.type].h); }
   for (const w of S.workers) { g.fillStyle = w.role === 'jack' ? '#ffffff' : '#9ad4ff'; g.fillRect(Math.floor(w.x / TS), Math.floor(w.y / TS), 1, 1); }
+  for (const b of S.extra) { g.fillStyle = '#1c120c'; g.fillRect(b.x - 1, b.y - 1, b.w + 2, b.h + 2); g.fillStyle = '#ffd8a0'; g.fillRect(b.x, b.y, b.w, b.h); }
   for (let k = 1; k < NT; k++) {       // crossings: pale once bridged, a hollow mark until then
     const b = W.site[k]; g.fillStyle = '#1c120c'; g.fillRect(b.x - 1, b.y - 1, b.w + 2, b.h + 2);
     g.fillStyle = k <= S.reach ? '#ffd8a0' : spanOpen(k) ? '#ff9a4a' : '#7a6a5a'; g.fillRect(b.x, b.y, b.w, b.h);

@@ -894,6 +894,8 @@ Object.assign(ICONS, {
     { w: '#d8f0ff' }],
   bridge: [['............', '.p........p.', '.p........p.', 'pppppppppppp', '.p..p..p..p.', 'LLLLLLLLLLLL', 'bbbbbbbbbbbb', '.b........b.', '.b........b.', 'wwwwwwwwwwww', '.wwwwwwwwww.'],
     { p: '#a06c38', L: '#dca868', b: '#6e4622', w: '#5aaccc' }],
+  clearing: [['............', '.p........p.', '.P........P.', '.p..g.....p.', '.dddddddddd.', '.dDDDDDDDDd.', '.dDDdDDDDDd.', '.dDDDDDdDDd.', '.dddddddddd.', '.p........p.', '.P........P.'],
+    { p: '#c08a4e', P: '#6e4622', d: '#8e6e48', D: '#b6966a', g: '#5aa348' }],
   star: [['.....yy.....', '.....yy.....', '....yYYy....', 'yyyyyYYyyyyy', '.yYYYYYYYYy.', '..yYYYYYYy..', '...yYYYYy...', '..yYYyyYYy..', '..yYy..yYy..', '.yyy....yyy.'],
     { y: '#e8a81c', Y: '#ffe060' }],
 });

@@ -1,7 +1,7 @@
 // MeepleJacks — game data: map size, trees, goods, tools, buildings, crew, goals. Tune the game here.
 'use strict';
 
-const VERSION = '1.2';
+const VERSION = '1.3';
 const TS = 16;                 // art pixels per tile
 const MW = 192, MH = 192;      // map size in tiles
 const CX = 96, CY = 96;        // the Lumber Yard sits here
@@ -37,6 +37,9 @@ const ANCIENT_HP = [1000, 2800, 6000, 12000, 22000, 36000, 60000];
 const ANCIENT_TIMBER = [60, 120, 240, 420, 700, 1000];
 const ANCIENT_LOGS = 100;      // the last Ancient tree has no river beyond it: it leaves ordinary logs
 const BRIDGE_TIME = 1.5;       // seconds to hammer one timber into a bridge
+// Once a river has its first bridge, more can be bought and put anywhere along it. Each one over the same river costs twice the coins.
+const BRIDGE_COINS = [0, 150, 800, 3000, 12000, 50000, 150000];
+const CLEAR_MAX = 20;          // the longest side of a clearing, in tiles
 const ANCIENT_CREW = 12;       // how many lumberjacks can swing at one at once
 
 // ---------------------------------------------------------------- seasons
@@ -92,6 +95,10 @@ const UPG = {
 function upgCost(k, lvl) {
   const U = UPG[k];
   return { coins: Math.round(U.base * Math.pow(U.mult, lvl)), wood: U.item ? [[U.item[0], U.item[1] * (lvl + 1)]] : [] };
+}
+
+function bridgeCost(k, extra) {
+  return { coins: BRIDGE_COINS[k] * Math.pow(2, extra || 0), wood: [[k <= 2 ? LOG(k - 1) : PLANK(k - 1), 20 + 20 * k]] };
 }
 
 const PLAYER_CARRY = 3, HAULER_CARRY = 6, CARTER_CARRY = 20, DEPOT_ROOM = 300;

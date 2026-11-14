@@ -261,6 +261,13 @@ const PANELS = {
     const nk = S.reach + 1;
     if (nk < NT) b += `<div class="card"><div class="row">${ico('bridge', 'xl')}<div class="grow"><div class="t">Bridge over the ${RIVER_NAMES[nk]} River</div><div class="s">The only way across to the ${TREES[nk].name}. It is built at the river's one crossing place, from the timbers of the Ancient ${TREES[nk - 1].name}.</div></div></div>
       ${spanBody(nk)}<div class="row" style="margin-top:.45rem"><button class="btn grow" data-a="showspan" data-v="${nk}">Show the crossing</button></div></div>`;
+    if (S.reach >= 1) {
+      const c = bridgeCost(S.reach, bridgesOver(S.reach));
+      b += `<div class="card"><div class="row">${ico('bridge', 'lg')}<div class="grow"><div class="t">Another bridge${S.extra.length ? ' <span class="s">× ' + S.extra.length + '</span>' : ''}</div><div class="s">A second way over a river you have already bridged, wherever you like along it, to save the crew long walks. Each extra one over the same river costs twice the coins.</div></div></div>
+        <div class="row" style="margin-top:.45rem"><div class="grow"><span class="chip">${ico('coin')}${fmt(c.coins)} for the ${RIVER_NAMES[S.reach]} River</span></div><button class="btn green" data-a="place" data-v="bridge">Place</button></div></div>`;
+    }
+    b += `<div class="card"><div class="row">${ico('clearing', 'lg')}<div class="grow"><div class="t">Clearing${S.clearings.length ? ' <span class="s">× ' + S.clearings.length + '</span>' : ''}</div><div class="s">Mark out a patch of ground to keep clear. Stumps and saplings there go at once, lumberjacks from cabins nearby fell what is standing, and nothing grows back: room for the Great Lodge, or anything else.</div></div></div>
+      <div class="row" style="margin-top:.45rem"><div class="grow"><span class="chip ok">Free</span></div><button class="btn green" data-a="place" data-v="clear">Mark</button></div></div>`;
     for (const type of ['cabin', 'forester', 'sawmill', 'kiln', 'depot', 'workshop', 'lodge']) {
       const B = BUILD[type], img = type === 'lodge' ? ART.url.lodge : ART.url[type];
       if (!unlocked(type)) { b += `<div class="card locked row"><img class="bimg" src="${img}" style="filter:brightness(0) opacity(.45)"><div class="grow"><div class="t">${B.name}</div><div class="s">To unlock: ${B.need[2]}.</div></div></div>`; continue; }
@@ -365,7 +372,7 @@ function panelAct(a, v) {
   else if (a === 'order') { ok = fillOrder(+v); snd = 'coin'; if (ok) toast('Order delivered', 'good', 'coin'); }
   else if (a === 'axe') { ok = buyAxe(v === '1'); snd = 'upgrade'; if (ok) toast((v === '1' ? 'The crew now swing the ' : 'You forged the ') + AXES[S[v === '1' ? 'crewAxe' : 'axe']].name + '!', 'good', 'axe' + S[v === '1' ? 'crewAxe' : 'axe']); }
   else if (a === 'upg') { ok = buyUpg(v); snd = 'upgrade'; }
-  else if (a === 'place') { startPlace(v); return; }
+  else if (a === 'place') { if (v === 'bridge') startBridge(); else if (v === 'clear') startClear(); else startPlace(v); return; }
   else if (a === 'showspan') { const sx = W.site[+v]; panTo((sx.x + sx.w / 2) * TS, (sx.y + sx.h / 2) * TS); if (R.k < 1) R.kT = R.defaultK(); openPanel('span', +v); return; }
   else if (a === 'spansend') { const [k, on] = v.split('|'); ok = sendHaulers(+k, on === '1'); snd = on === '1' ? 'hire' : 'click'; if (ok && on === '1') toast(`${countRole('hauler')} hauler${countRole('hauler') === 1 ? '' : 's'} sent to build the bridge`, 'good', 'hauler'); }
   else if (a === 'spancarry') { ok = cmdSpan(+v) === 'ok'; if (ok) { closePanel(); R.follow = true; R.anchor = null; AUDIO.sfx('click'); return; } }
@@ -395,6 +402,47 @@ function panelAct(a, v) {
 }
 
 // ---------------------------------------------------------------- placing or moving a building
+// ---- an extra bridge: tap anywhere along a river that already has one
+function setBridgeGhost(tx, ty) {
+  const b = planBridge(tx, ty);
+  R.ghost = b ? { bridge: b } : null;
+  const can = b && b.ok && canAfford(b.cost);
+  $('modebar').innerHTML = `<span>${!b ? 'Tap a river to choose where the bridge goes.' : !b.ok ? b.why + '.' : RIVER_NAMES[b.k] + ' River: ' + chips(b.cost)}</span>
+    <button class="btn green ${can ? '' : 'dis'}" data-a="ok">Build</button><button class="btn" data-a="cancel">Cancel</button>`;
+}
+function startBridge() {
+  closePanel();
+  UI.place = { type: 'bridge' }; $('modebar').classList.remove('hidden');
+  const c = R.screenToWorld(R.W / 2, R.H / 2), cx = Math.floor(c.x / TS), cy = Math.floor(c.y / TS);
+  // start on the bridged river nearest the middle of the screen
+  let plan = null, bd = 1e9;
+  for (let k = 1; k <= S.reach; k++) { const p = findBridgeSpot(k, cx, cy); if (p) { const d = Math.hypot(p.x - cx, p.y - cy); if (d < bd) { bd = d; plan = p; } } }
+  if (plan) { panTo((plan.x + plan.w / 2) * TS, (plan.y + plan.h / 2) * TS); if (R.k < 1) R.kT = R.defaultK(); setBridgeGhost(plan.tx, plan.ty); }
+  else setBridgeGhost(cx, cy);
+  toast('Tap anywhere along a bridged river to choose the spot, then press Build', null, 'bridge');
+}
+// ---- a clearing: drag out a patch of ground, or tap for one the size the Lodge needs
+function clearBar() {
+  $('modebar').innerHTML = `<span>Drag over the ground to mark a clearing, or tap for a Lodge-sized one. Tap a clearing to let it grow back.${S.clearings.length ? ' ' + S.clearings.length + ' marked.' : ''}</span><button class="btn green" data-a="cancel">Done</button>`;
+}
+function startClear() {
+  closePanel(); R.ghost = null;
+  UI.place = { type: 'clear' }; $('modebar').classList.remove('hidden');
+  clearBar();
+}
+function clearTap(tx, ty) {
+  const old = clearingAt(tx, ty);
+  if (old) { removeClearing(old); AUDIO.sfx('close'); toast('Clearing let go: the trees will grow back there', null, 'clearing'); clearBar(); saveGame(); return; }
+  clearDone(tx - 3, ty - 2, tx + 3, ty + 2);              // 7 × 5: the Lodge and a little elbow room
+}
+function clearDone(x0, y0, x1, y1) {
+  const c = addClearing(x0, y0, x1, y1);
+  if (typeof c === 'string') { AUDIO.sfx('error'); toast(c === 'water' ? 'There is no ground there to clear' : 'Drag a little farther', 'bad'); return; }
+  const left = clearLeft(c);
+  AUDIO.sfx('plant');
+  toast(left ? `Clearing marked. ${left} grown tree${left === 1 ? '' : 's'} still to fell: tap them, or lumberjacks from a cabin nearby will.` : 'Clearing marked. Nothing will grow here now.', 'good', 'clearing');
+  clearBar(); saveGame();
+}
 function setGhost(tx, ty) {
   const pl = UI.place, self = pl.moveId ? W.bById.get(pl.moveId) : null;
   R.ghost = { type: pl.type, tx, ty, ok: canPlace(pl.type, tx, ty, self) };
@@ -415,9 +463,16 @@ function startPlace(type, moveId) {
   setGhost(best ? best[0] : cx, best ? best[1] : cy);
   toast(`Tap the ground to choose a spot, then press ${self ? 'Move' : 'Build'}`, null, type === 'lodge' ? 'lodge' : type);
 }
-function endPlace() { UI.place = null; R.ghost = null; $('modebar').classList.add('hidden'); }
+function endPlace() { UI.place = null; R.ghost = null; R.draft = null; $('modebar').classList.add('hidden'); }
 function confirmPlace() {
-  const g = R.ghost, pl = UI.place; if (!g || !pl) return;
+  const g = R.ghost, pl = UI.place; if (!pl) return;
+  if (pl.type === 'bridge') {
+    const b = g && g.bridge;
+    if (!b || !b.ok) { AUDIO.sfx('error'); toast(b ? b.why : 'Tap a river first', 'bad'); return; }
+    if (!buyBridge(b)) { AUDIO.sfx('error'); toast(canAfford(b.cost) ? "It can't go there" : "You can't afford it yet", 'bad'); return; }
+    endPlace(); saveGame(); return;
+  }
+  if (!g) return;
   if (pl.moveId) {
     if (!moveBuilding(pl.moveId, g.tx, g.ty)) { AUDIO.sfx('error'); toast("It can't go there", 'bad'); setGhost(g.tx, g.ty); return; }
     const id = pl.moveId; endPlace(); openPanel('bld', id); saveGame(); return;
@@ -443,6 +498,8 @@ function riverToast(i) {
 }
 function onWorldTap(sx, sy) {
   const w = R.screenToWorld(sx, sy);
+  if (UI.place && UI.place.type === 'bridge') { setBridgeGhost(Math.floor(w.x / TS), Math.floor(w.y / TS)); AUDIO.sfx('click'); return; }
+  if (UI.place && UI.place.type === 'clear') { clearTap(Math.floor(w.x / TS), Math.floor(w.y / TS)); return; }
   if (UI.place) { const B = BUILD[UI.place.type]; setGhost(Math.floor(w.x / TS) - (B.w >> 1), Math.floor(w.y / TS) - (B.h >> 1)); AUDIO.sfx('click'); return; }
   for (const b of S.buildings) {
     const base = bBase(b), s = spriteOf(b);
@@ -485,13 +542,14 @@ function onWorldTap(sx, sy) {
 }
 
 const PTR = new Map();
-let pinch = null, dragMoved = false, downAt = 0, wheelAcc = 0;
+let pinch = null, dragMoved = false, downAt = 0, wheelAcc = 0, clearDrag = null;
 function setupInput() {
   const cv = R.cv;
   cv.addEventListener('pointerdown', e => {
     try { cv.setPointerCapture(e.pointerId); } catch (err) { }
     PTR.set(e.pointerId, { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY });
     if (PTR.size === 1) { dragMoved = false; downAt = performance.now(); }
+    if (PTR.size === 1 && UI.place && UI.place.type === 'clear' && UI.inGame) { const w = R.screenToWorld(e.clientX, e.clientY); clearDrag = { x0: Math.floor(w.x / TS), y0: Math.floor(w.y / TS) }; } else { clearDrag = null; R.draft = null; }
     if (PTR.size === 2) {
       const [a, b] = [...PTR.values()];
       pinch = { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, k: R.k, cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2 };
@@ -504,7 +562,8 @@ function setupInput() {
     p.x = e.clientX; p.y = e.clientY;
     if (PTR.size === 1) {
       if (Math.hypot(p.x - p.sx, p.y - p.sy) > 10) dragMoved = true;
-      if (dragMoved) { R.follow = false; R.anchor = null; R.cam.x -= dx / R.z; R.cam.y -= dy / R.z; R.clampCam(); }
+      if (clearDrag) { if (dragMoved) { const w = R.screenToWorld(p.x, p.y); R.draft = { x0: clearDrag.x0, y0: clearDrag.y0, x1: Math.floor(w.x / TS), y1: Math.floor(w.y / TS) }; } }
+      else if (dragMoved) { R.follow = false; R.anchor = null; R.cam.x -= dx / R.z; R.cam.y -= dy / R.z; R.clampCam(); }
     } else if (PTR.size === 2 && pinch) {
       const [a, b] = [...PTR.values()];
       const d = Math.hypot(a.x - b.x, a.y - b.y), cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
@@ -518,6 +577,12 @@ function setupInput() {
   const up = e => {
     if (!PTR.has(e.pointerId)) return;
     PTR.delete(e.pointerId);
+    if (clearDrag && R.draft && PTR.size === 0) {       // a clearing dragged out
+      const d = R.draft; clearDrag = null; R.draft = null;
+      if (e.type === 'pointerup' && UI.place && UI.place.type === 'clear') clearDone(d.x0, d.y0, d.x1, d.y1);
+      return;
+    }
+    clearDrag = null;
     if (pinch && PTR.size < 2) {
       const w = R.screenToWorld(pinch.cx, pinch.cy);
       R.kT = R.snapK(R.k); R.anchor = { sx: pinch.cx, sy: pinch.cy, wx: w.x, wy: w.y };
@@ -559,6 +624,7 @@ function onGameEvent(e) {
   if (e.t === 'order') { AUDIO.sfx('order'); toast('A new order has come in', null, 'scroll'); return; }
   if (e.t === 'season') { AUDIO.sfx('order'); toast(`<b>${SEASONS[e.s].name}</b> is here. ${SEASONS[e.s].perk}.`, null, SEASONS[e.s].id); return; }
   if (e.t === 'skill') { if (e.w.lvl === SKILL.length - 1) toast(`${esc(e.w.name)} is now a <b>Master</b> ${ROLES[e.w.role].name.toLowerCase()}`, 'good', e.w.role); return; }
+  if (e.t === 'bridge' && !e.first) { toast(`Another way over the ${RIVER_NAMES[e.k]} River`, 'good', 'bridge'); return; }
   if (e.t === 'bridge') {
     AUDIO.sfx('goal');
     if (UI.panel === 'span' || UI.panel === 'anc') renderPanel(true);
@@ -711,6 +777,7 @@ function openHelp(fromPause) {
     <p>${ico('cabin', 'sm')} <b>Lumberjacks</b> cut the nearest trees to their cabin, however far that is. <b>Haulers</b> carry the piles in. Tap a cabin to hire, to pick <b>one kind of wood</b> for it, or to <b>move</b> it for free.</p>
     <p>${ico('axe2', 'sm')} The forest grows in rings. Pine by the yard is soft and cheap. Birch, Oak, Maple, Cherry, Redwood and Ebony each lie farther out, take a better <b>axe</b>, and sell for more.</p>
     <p>${ico('bridge', 'sm')} A <b>river</b> runs round every ring, with one crossing place that is somewhere different in every forest. To bridge it, first fell the ring's ${ico('star', 'sm')} <b>Ancient tree</b> (find it on the Map, tap it and call your lumberjacks). Its timbers are the bridge: <b>send the haulers</b> to carry them to the crossing and hammer them in, or carry some yourself. Then move a cabin across so its crew is close to the new wood.</p>
+    <p>${ico('clearing', 'sm')} Short of room? <b>Build ➜ Clearing</b> marks a patch of ground that stays clear once its trees are felled, and <b>Build ➜ Another bridge</b> buys an extra way over a river you have already bridged.</p>
     <p>${ico('autumn', 'sm')} The <b>seasons</b> turn every few minutes: trees grow back fastest in spring and slowest in winter, the workshops are quickest in summer, orders pay best in autumn, and haulers sled over winter snow. Tap the season at the top of the screen to see what it does.</p>
     <p>${ico('hauler', 'sm')} Every Meeple has a <b>quirk</b> and gets better with time on the job. If a quirk is wasted where they are, tap <b>Job</b> in their building to move them somewhere it helps.</p>
     <p>${ico('forester', 'sm')} <b>Foresters</b> replant stumps. ${ico('sawyer', 'sm')} <b>Sawyers</b> saw logs into planks. ${ico('collier', 'sm')} <b>Colliers</b> burn cheap logs into charcoal. ${ico('carpenter', 'sm')} <b>Carpenters</b> build furniture. ${ico('carter', 'sm')} <b>Carters</b> wheel loads home from a Log Depot. Each needs its own building.</p>
