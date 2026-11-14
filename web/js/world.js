@@ -252,7 +252,29 @@ function los(x0, y0, x1, y1) {
   for (let k = 1; k < n; k++) if (blockedPx(x0 + (x1 - x0) * k / n, y0 + (y1 - y0) * k / n)) return false;
   return true;
 }
+// A way from one spot to another. Across rivers the only way is over each bridge in turn, so the route is
+// found one ring at a time: to this ring's crossing, over it, and on. That keeps every search inside one ring.
 function findPath(sx, sy, tx, ty) {
+  if (los(sx, sy, tx, ty)) return [{ x: tx, y: ty }];
+  const at = (x, y) => idx(clamp(Math.floor(x / TS), 0, MW - 1), clamp(Math.floor(y / TS), 0, MH - 1));
+  const a = W.reg[at(sx, sy)], b = W.reg[at(tx, ty)];
+  if (a === b) return pathIn(sx, sy, tx, ty, a);
+  const out = [], step = a < b ? 1 : -1, lane = (Math.random() - 0.5) * 12;      // keep to one side of each bridge, so a crowd spreads out
+  let px = sx, py = sy;
+  for (let r = a; r !== b; r += step) {
+    const k = step > 0 ? r + 1 : r, s = W.site[k];
+    if (!s || k > S.reach) return pathIn(sx, sy, tx, ty, -1);          // no bridge that way: fall back on a plain search
+    const on = siteEnd(s, step > 0 ? 1 : 0), off = siteEnd(s, step > 0 ? 0 : 1);
+    if (s.v) { on.x += lane; off.x += lane; } else { on.y += lane; off.y += lane; }
+    const hx = Math.floor(px / TS), hy = Math.floor(py / TS), onDeck = hx >= s.x && hx < s.x + s.w && hy >= s.y && hy < s.y + s.h;      // already on this bridge
+    if (!onDeck) for (const q of pathIn(px, py, on.x, on.y, r)) out.push(q);
+    out.push(off); px = off.x; py = off.y;
+  }
+  for (const q of pathIn(px, py, tx, ty, b)) out.push(q);
+  return out;
+}
+// ring: search only inside that ring (and on bridge decks); -1 for anywhere
+function pathIn(sx, sy, tx, ty, ring) {
   const dest = { x: tx, y: ty };
   if (los(sx, sy, tx, ty)) return [dest];
   const tile = (x, y) => idx(clamp(Math.floor(x / TS), 0, MW - 1), clamp(Math.floor(y / TS), 0, MH - 1));
@@ -286,6 +308,7 @@ function findPath(sx, sy, tx, ty) {
       if (!dx && !dy) continue;
       const nx = cx + dx, ny = cy + dy; if (!inMap(nx, ny)) continue;
       const ni = idx(nx, ny); if (W.block[ni] || PF.done[ni] === gen) continue;
+      if (ring >= 0 && W.reg[ni] !== ring && W.ter[ni] !== TER.BRIDGE) continue;
       if (dx && dy && (W.block[idx(cx + dx, cy)] || W.block[idx(cx, cy + dy)])) continue;
       const g = PF.g[c] + (dx && dy ? 1.414 : 1);
       if (PF.seen[ni] !== gen || g < PF.g[ni]) { PF.g[ni] = g; PF.seen[ni] = gen; PF.from[ni] = c; push(ni, g + h(ni)); }

@@ -64,8 +64,8 @@ You start with a rusty hatchet and a Lumber Yard in the middle of a big forest.
 
   Each season also has a fair of its own that sends extra orders for one kind of goods at a better price.
 - **The Great Lodge** is the long project: seven storeys, one per wood, each raised in three steps and each with a
-  lasting reward. Finishing it is the end of the game (about 16 hours for a tireless autoplayer; a person will take
-  a good deal longer).
+  lasting reward. Finishing it is the end of the game (15 to 23 hours for a tireless autoplayer, depending on how
+  far apart the crossings fall in that forest; a person will take a good deal longer).
 - **Orders** from the neighbours pay well over the usual price, and each one filled raises your standing with them.
 - **Hats and silly walks.** Felling trees sometimes shakes a hat loose (25 to find: three per kind of tree, and
   one that only turns up in each season). Wear

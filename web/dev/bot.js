@@ -5,10 +5,12 @@
 
 window.BOT = { log: [], status: 'idle' };
 
-function botFindSpot(type, cx, cy) {
+// ring: only look inside that ring of the forest (0 is the yard's own)
+function botFindSpot(type, cx, cy, ring) {
   let best = null, bd = 1e9;
   for (let r = 0; r < 40 && !best; r += 2) for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
     if (Math.max(Math.abs(dx), Math.abs(dy)) < r - 1) continue;
+    if (ring != null && (!inMap(cx + dx, cy + dy) || W.reg[idx(cx + dx, cy + dy)] !== ring)) continue;
     if (canPlace(type, cx + dx, cy + dy)) { const d = dx * dx + dy * dy; if (d < bd) { bd = d; best = [cx + dx, cy + dy]; } }
   }
   return best;
@@ -46,7 +48,9 @@ function botThink() {
     const c = buildCost(type);
     add(c.coins, c.wood, () => {
       const far = type === 'depot' && top > 0 ? beyond(top) : null, ang = countB(type) * 2.4 + 0.5;
-      const spot = far ? botFindSpot(type, far[0], far[1]) : botFindSpot(type, Math.round(CX + Math.cos(ang) * (7 + countB(type) * 1.5 + S.buildings.length)), Math.round(CY + Math.sin(ang) * (7 + S.buildings.length)));
+      // everything but a depot stays on the yard's side of the First River, so nobody carries goods over a bridge to work
+      const rad = Math.min(14, 7 + S.buildings.length * 0.5);
+      const spot = far ? botFindSpot(type, far[0], far[1]) : botFindSpot(type, Math.round(CX + Math.cos(ang) * rad), Math.round(CY + Math.sin(ang) * rad), 0);
       return spot && placeBuilding(type, spot[0], spot[1]);
     }, type);
   }
