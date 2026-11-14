@@ -1,7 +1,7 @@
 // MeepleJacks — game data: map size, trees, goods, tools, buildings, crew, goals. Tune the game here.
 'use strict';
 
-const VERSION = '1.1';
+const VERSION = '1.2';
 const TS = 16;                 // art pixels per tile
 const MW = 192, MH = 192;      // map size in tiles
 const CX = 96, CY = 96;        // the Lumber Yard sits here
@@ -23,6 +23,29 @@ const NT = TREES.length;
 const DENSITY = [1, 1, 0.82, 0.8, 0.74, 0.74, 0.6];
 // distance from the yard (in tiles) where each tree ring begins
 const RINGS = [4.5, 21, 35, 49, 62, 74, 85];
+
+// A river runs all the way round the camp where each ring gives way to the next, so the forest is a
+// set of islands inside islands. Each river needs a bridge, and the first bridge over a river can
+// only be built once the Ancient tree of the ring inside it has come down.
+const RIVER_HALF = 1.25;       // half the width of a river, in tiles
+const BRIDGE_MAX = 12;         // the longest a bridge can be, in tiles
+const BRIDGE_COINS = [0, 60, 300, 1200, 5000, 20000, 70000];
+const RIVER_NAMES = ['', 'First', 'Second', 'Third', 'Fourth', 'Fifth', 'Sixth'];
+// One Ancient tree stands in each ring. It takes hp axe damage to fell (bring the crew) and drops a great heap of logs and a hat.
+const ANCIENT_HP = [320, 900, 2000, 4000, 7200, 12000, 20000];
+const ANCIENT_LOGS = [40, 50, 60, 70, 80, 90, 100];
+const ANCIENT_CREW = 12;       // how many lumberjacks can swing at one at once
+
+// ---------------------------------------------------------------- seasons
+// The year turns as you play: four seasons of SEASON_LEN seconds each, starting in spring.
+const SEASON_LEN = 300;
+const SEASONS = [
+  { id: 'spring', name: 'Spring', perk: 'Growth spurt: trees grow back 50% faster',                         want: 'plank', fair: 'Spring building' },
+  { id: 'summer', name: 'Summer', perk: 'Long days: sawyers, colliers and carpenters work 20% faster',      want: 'furn',  fair: 'Summer fair' },
+  { id: 'autumn', name: 'Autumn', perk: 'Harvest: orders pay 25% more and hats shake loose twice as often', want: 'log',   fair: 'Harvest festival' },
+  { id: 'winter', name: 'Winter', perk: 'Snow: haulers and carters sled 25% faster, but trees grow back 40% slower', want: 'char', fair: 'Winter fuel' },
+];
+const SEASON_GROW = [1.5, 1, 1, 0.6];
 
 // ---------------------------------------------------------------- goods
 // Everything the yard can hold, by index: logs, then planks, then furniture, then charcoal.
@@ -66,6 +89,11 @@ const UPG = {
 function upgCost(k, lvl) {
   const U = UPG[k];
   return { coins: Math.round(U.base * Math.pow(U.mult, lvl)), wood: U.item ? [[U.item[0], U.item[1] * (lvl + 1)]] : [] };
+}
+
+// A bridge over river k (1 = between Pine and Birch). Each extra bridge over the same river costs twice the coins.
+function bridgeCost(k, extra) {
+  return { coins: BRIDGE_COINS[k] * Math.pow(2, extra || 0), wood: [[k <= 2 ? LOG(k - 1) : PLANK(k - 1), 10 + 10 * k]] };
 }
 
 const PLAYER_CARRY = 3, HAULER_CARRY = 6, CARTER_CARRY = 20, DEPOT_ROOM = 300;
@@ -161,6 +189,26 @@ const RECIPE = {
   carpenter: { per: 2, time: 5,   kind: 'furn',  types: NT, inp: t => PLANK(t), out: t => FURN(t) },
 };
 
+// Every Meeple you hire has a quirk. `fits` lists the jobs it helps in; without it, it helps in any job.
+const QUIRKS = [
+  { id: 'strong',  name: 'Strong Back',    text: 'carries more on every trip',                      fits: ['hauler', 'carter', 'sawyer', 'collier', 'carpenter', 'builder'] },
+  { id: 'quick',   name: 'Quick Feet',     text: 'walks 20% faster' },
+  { id: 'swing',   name: 'Mighty Swing',   text: 'chops 25% faster',                                fits: ['jack'] },
+  { id: 'magnet',  name: 'Hat Magnet',     text: 'shakes hats out of trees six times as often',     fits: ['jack'] },
+  { id: 'thumb',   name: 'Green Thumb',    text: 'replants twice as fast',                          fits: ['forester'] },
+  { id: 'nimble',  name: 'Nimble Fingers', text: 'works 25% faster at the bench',                   fits: ['sawyer', 'collier', 'carpenter', 'builder'] },
+  { id: 'early',   name: 'Early Riser',    text: 'takes half as long between jobs' },
+  { id: 'dreamer', name: 'Daydreamer',     text: 'dawdles between jobs, but learns twice as fast' },
+  { id: 'snow',    name: 'Snow Lover',     text: '30% faster all winter' },
+  { id: 'sun',     name: 'Sun Chaser',     text: '30% faster all summer' },
+];
+const QUIRK = {}; QUIRKS.forEach(q => { QUIRK[q.id] = q; });
+const quirkFits = (q, role) => !!QUIRK[q] && (!QUIRK[q].fits || QUIRK[q].fits.includes(role));
+// Meeples get better with time on the job. at: seconds of work to reach the level. Each level is SKILL_BONUS faster at everything.
+const SKILL = [{ name: 'Greenhorn', at: 0 }, { name: 'Steady Hand', at: 600 }, { name: 'Old Hand', at: 1800 }, { name: 'Expert', at: 4500 }, { name: 'Master', at: 9000 }];
+const SKILL_BONUS = 0.06;
+const skillOf = xp => { let l = 0; while (l < SKILL.length - 1 && xp >= SKILL[l + 1].at) l++; return l; };
+
 const NAMES = ['Birch', 'Timber', 'Knotty', 'Splinter', 'Sawyer', 'Chip', 'Woody', 'Barkley', 'Cedric', 'Hazel', 'Rowan', 'Aspen',
   'Twig', 'Bramble', 'Forrest', 'Juniper', 'Linden', 'Alder', 'Ash', 'Willow', 'Stumpy', 'Plank', 'Maple', 'Burl', 'Acorn', 'Fern',
   'Moss', 'Hickory', 'Elm', 'Sorrel', 'Thorn', 'Root', 'Bud', 'Sprig', 'Kindle', 'Tinder', 'Cork', 'Larch', 'Yew', 'Sapling',
@@ -179,6 +227,9 @@ const HATS = [
   { id: 'blossom',  name: 'Blossom Wreath',   tree: 4 }, { id: 'cherries', name: 'Cherries on Top', tree: 4 }, { id: 'kasa',     name: 'Rice Hat',       tree: 4 },
   { id: 'bear',     name: 'Bear Ears',        tree: 5 }, { id: 'cone',     name: 'Traffic Cone',    tree: 5 }, { id: 'antlers',  name: 'Antlers',        tree: 5 },
   { id: 'wizard',   name: "Wizard's Hat",     tree: 6 }, { id: 'mushroom', name: 'Glowcap',         tree: 6 }, { id: 'crown',    name: 'Ebony Crown',    tree: 6 },
+  // one for each season: any tree can drop it, but only in that season
+  { id: 'bunny',    name: 'Bunny Ears',       tree: -1, season: 0 }, { id: 'sunhat', name: 'Sun Hat',       tree: -1, season: 1 },
+  { id: 'pumpkin',  name: 'Pumpkin Head',     tree: -1, season: 2 }, { id: 'earmuffs', name: 'Earmuffs',    tree: -1, season: 3 },
 ];
 
 // ---------------------------------------------------------------- goals
@@ -190,11 +241,15 @@ const GOALS = [
   { id: 'cabin1',   t: 'Build a Lumberjack Cabin',   d: 'Build ➜ Cabin. Keep 10 Pine logs unsold for it.',              key: 'cabins',    n: 1,  r: 10 },
   { id: 'jack1',    t: 'Hire a lumberjack',          d: 'Tap your cabin and hire a lumberjack.',                        key: 'r:jack',    n: 1,  r: 10 },
   { id: 'hauler1',  t: 'Hire a hauler',              d: 'Haulers carry log piles back to the yard.',                    key: 'r:hauler',  n: 1,  r: 15 },
-  { id: 'axe2',     t: 'Forge an Iron Axe',          d: 'Yard ➜ Workshop: yours or the crew\'s. Birch grows farther out.', key: 'axe',    n: 2,  r: 20 },
-  { id: 'birch10',  t: 'Sell 10 Birch logs',         d: 'Birch is tougher than Pine but pays better.',                  key: 'sold1',     n: 10, r: 40 },
+  { id: 'anc0',     t: 'Fell the Ancient Pine',      d: 'A giant stands among the pines: see the Map. Tap it and call your lumberjacks.', key: 'anc', n: 1, r: 30 },
+  { id: 'axe2',     t: 'Forge an Iron Axe',          d: 'Yard ➜ Workshop: yours or the crew\'s. Birch grows across the river.', key: 'axe', n: 2,  r: 20 },
+  { id: 'bridge1',  t: 'Bridge the First River',     d: 'Build ➜ Bridge. Then move a cabin across so its crew is near the Birch.', key: 'reach', n: 1, r: 40 },
+  { id: 'birch10',  t: 'Sell 10 Birch logs',         d: 'Tap a cabin, then Move, to put its crew over the bridge.',                  key: 'sold1',     n: 10, r: 40 },
   { id: 'crew4',    t: 'Have a crew of 4',           d: 'Lumberjacks cut; haulers fetch. Keep them in balance.',        key: 'workers',   n: 4,  r: 60 },
   { id: 'axe3',     t: 'Forge a Steel Axe',          d: 'Yours or the crew\'s. Each new axe opens the next ring.',      key: 'axe',       n: 3,  r: 100 },
-  { id: 'oak20',    t: 'Sell 20 Oak logs',           d: 'Set a cabin to cut only Oak, or move it out among the oaks.',  key: 'sold2',     n: 20, r: 200 },
+  { id: 'anc1',     t: 'Fell the Ancient Birch',     d: 'Each ring has one giant. Its fall opens the way over the next river.', key: 'anc', n: 2, r: 120 },
+  { id: 'bridge2',  t: 'Bridge the Second River',    d: 'Oak grows on the far bank. A second bridge over a river saves long walks.', key: 'reach', n: 2, r: 150 },
+  { id: 'oak20',    t: 'Sell 20 Oak logs',           d: 'Move a cabin over the bridges and set it to cut only Oak.',  key: 'sold2',     n: 20, r: 200 },
   { id: 'cabins2',  t: 'Build a second cabin',       d: 'Cabins can be moved for free whenever you like.',              key: 'cabins',    n: 2,  r: 250 },
   { id: 'forester', t: "Build a Forester's Hut",     d: 'Foresters replant stumps so cut land grows back sooner.',      key: 'b:forester', n: 1, r: 300 },
   { id: 'sawmill',  t: 'Build a Sawmill',            d: 'Planks sell for 2.4 times the price of the logs.',             key: 'b:sawmill', n: 1,  r: 400 },
@@ -202,12 +257,16 @@ const GOALS = [
   { id: 'planks50', t: 'Saw 50 planks',              d: 'Hold some logs back in the yard so there is wood to saw.',     key: 'made:plank', n: 50, r: 600 },
   { id: 'order1',   t: 'Fill an order',              d: 'Yard ➜ Orders. Neighbours pay well over the usual price.',     key: 'orders',    n: 1,  r: 500 },
   { id: 'hat1',     t: 'Find a hat',                 d: 'Hats hide in trees. Felling them yourself shakes them loose sooner.', key: 'hats', n: 1, r: 300 },
+  { id: 'anc2',     t: 'Fell the Ancient Oak',       d: 'Call the lumberjacks: it is far too much for one axe.',        key: 'anc',       n: 3,  r: 500 },
+  { id: 'bridge3',  t: 'Bridge the Third River',     d: 'This one wants Oak planks. Forge the Felling Axe for Maple.',  key: 'reach',     n: 3,  r: 600 },
   { id: 'maple30',  t: 'Sell 30 Maple logs',         d: 'The Maple ring glows orange.',                                 key: 'sold3',     n: 30, r: 600 },
   { id: 'kiln',     t: 'Build a Charcoal Kiln',      d: 'Charcoal turns cheap Pine into good money.',                   key: 'b:kiln',    n: 1,  r: 800 },
   { id: 'char30',   t: 'Burn 30 sacks of charcoal',  d: 'Hire a collier at the kiln.',                                  key: 'made:char', n: 30, r: 1000 },
   { id: 'lodge0',   t: 'Stake out the Great Lodge',  d: 'Build ➜ The Great Lodge. Choose a grand spot.',                key: 'b:lodge',   n: 1,  r: 1500 },
   { id: 'builder1', t: 'Hire a builder',             d: 'Tap the Lodge site. Builders carry what it needs from the yard.', key: 'r:builder', n: 1, r: 500 },
   { id: 'lodge1',   t: 'Lay the Pine Foundations',   d: 'Three steps: footings, sill beams, cellar. Keep the yard stocked.', key: 'lodge',  n: 1,  r: 3000 },
+  { id: 'anc3',     t: 'Fell the Ancient Maple',     d: 'A blaze of orange taller than the Lodge will ever be.',        key: 'anc',       n: 4,  r: 2000 },
+  { id: 'bridge4',  t: 'Bridge the Fourth River',    d: 'Cherry blossoms on the far side.',                             key: 'reach',     n: 4,  r: 2500 },
   { id: 'cherry40', t: 'Sell 40 Cherry logs',        d: 'Look for pink blossoms.',                                      key: 'sold4',     n: 40, r: 2000 },
   { id: 'depot',    t: 'Build a Log Depot',          d: 'Put it out where your crews are cutting.',                     key: 'b:depot',   n: 1,  r: 3000 },
   { id: 'carter1',  t: 'Hire a carter',              d: 'Carters wheel the depot\'s logs back to the yard.',            key: 'r:carter',  n: 1,  r: 1500 },
@@ -216,14 +275,19 @@ const GOALS = [
   { id: 'furn20',   t: 'Build 20 pieces of furniture', d: 'Hire a carpenter and keep planks in stock.',                 key: 'made:furn', n: 20, r: 6000 },
   { id: 'orders15', t: 'Fill 15 orders',             d: 'Your standing with the neighbours brings rewards.',            key: 'orders',    n: 15, r: 8000 },
   { id: 'lodge3',   t: 'Raise the Oak Frame',        d: 'It wants Birch Chairs and Oak Tables as well as Oak.',         key: 'lodge',     n: 3,  r: 15000 },
+  { id: 'anc4',     t: 'Fell the Ancient Cherry',    d: 'Petals for days.',                                             key: 'anc',       n: 5,  r: 6000 },
+  { id: 'bridge5',  t: 'Bridge the Fifth River',     d: 'The Redwoods stand beyond.',                                   key: 'reach',     n: 5,  r: 8000 },
   { id: 'redwood50', t: 'Sell 50 Redwood logs',      d: 'Giants of the deep forest.',                                   key: 'sold5',     n: 50, r: 6000 },
   { id: 'foreman',  t: 'Appoint a foreman',          d: 'Tap a cabin. A foreman makes its crew 30% faster.',            key: 'foremen',   n: 1,  r: 8000 },
   { id: 'lodge4',   t: 'Build the Maple Walls',      d: 'Chairs, tables and a great deal of Maple.',                    key: 'lodge',     n: 4,  r: 40000 },
   { id: 'hats10',   t: 'Find 10 hats',               d: 'Each kind of tree hides three.',                               key: 'hats',      n: 10, r: 20000 },
   { id: 'orders60', t: 'Fill 60 orders',             d: 'Timber Baron has a ring to it.',                               key: 'orders',    n: 60, r: 60000 },
   { id: 'lodge5',   t: 'Fit the Cherry Panelling',   d: 'Look for pink blossoms, and bring dressers.',                  key: 'lodge',     n: 5,  r: 120000 },
+  { id: 'anc5',     t: 'Fell the Ancient Redwood',   d: 'The biggest tree in the forest.',                              key: 'anc',       n: 6,  r: 20000 },
+  { id: 'bridge6',  t: 'Bridge the Sixth River',     d: 'The last river, and the Ebony beyond it.',                     key: 'reach',     n: 6,  r: 25000 },
   { id: 'ebony60',  t: 'Sell 60 Ebony logs',         d: 'The rarest wood, at the edge of the map.',                     key: 'sold6',     n: 60, r: 20000 },
   { id: 'lodge6',   t: 'Raise the Redwood Roof',     d: 'Nearly there.',                                                key: 'lodge',     n: 6,  r: 400000 },
+  { id: 'anc6',     t: 'Fell the Ancient Ebony',     d: 'The oldest thing in the valley.',                              key: 'anc',       n: 7,  r: 100000 },
   { id: 'lodge7',   t: 'Crown it with the Ebony Spire', d: 'The last storey of the Great Lodge.',                       key: 'lodge',     n: 7,  r: 1000000, win: true },
 ];
 // goal order in v1.0 saves, for carrying progress over

@@ -16,8 +16,15 @@ function botFindSpot(type, cx, cy) {
 function botThink() {
   const P = S.player;
   // --- you: keep chopping the nearest tree you can
-  if (P.st === 'idle' && !P.auto && P.pause <= 0) {
-    const i = nearestTile(Math.floor(P.x / TS), Math.floor(P.y / TS), t => isMature(t) && W.kind[t] <= S.axe && !W.claim.has(t));
+  // --- Ancient trees: call the crew as soon as their axes can bite, and lend a hand
+  let giant = -1;
+  for (let r = 0; r <= S.reach && r < NT; r++) if (!S.anc[r].done) {
+    if (canCut(S.crewAxe, r + 1) && countRole('jack') && !S.anc[r].call) callCrew(r, true);
+    if (canCut(S.axe, r + 1)) giant = r;
+  }
+  if (giant >= 0 && P.st !== 'toAnc' && P.st !== 'chopAnc' && !P.carry.length) cmdAncient(giant);
+  if (giant < 0 && P.st === 'idle' && !P.auto && P.pause <= 0) {
+    const i = nearestTile(Math.floor(P.x / TS), Math.floor(P.y / TS), t => isMature(t) && W.kind[t] <= S.axe && canReach(t) && !W.claim.has(t));
     if (i >= 0) cmdChop(i);
   }
   for (const o of S.orders.slice()) if (S.inv[o.item] >= o.n) fillOrder(o.id);
@@ -28,13 +35,16 @@ function botThink() {
   for (const crew of [true, false]) { const c = axeCost(crew); if (c && (crew || S.axe < S.crewAxe + 1)) add(c.coins, c.wood, () => buyAxe(crew), 'axe'); }
   for (const k in UPG) { const U = UPG[k]; if (S[k] < U.max && (!U.need || countB(U.need))) { const c = upgCost(k, S[k]); add(c.coins, c.wood, () => buyUpg(k), k); } }
   const fullOf = type => S.buildings.filter(b => b.type === type).every(b => crewOf(b.id).length >= bedsOf(b));
-  const top = Math.min(S.crewAxe, NT) - 1;
+  const top = Math.min(S.crewAxe, S.reach + 1, NT) - 1;
+  // bridges go in a line east of the yard, one over each river as soon as its Ancient tree is down
+  const nk = S.reach + 1;
+  if (nk < NT && !bridgeLock(nk)) { const c = bridgeCost(nk, 0); add(c.coins, c.wood, () => { const p = findBridgeSpot(nk, Math.round(CX + RINGS[nk]), CY); return p && buildBridge(p); }, 'bridge'); }
   const caps = { cabin: 99, forester: 2, sawmill: 4, kiln: 3, depot: 2, workshop: 4, lodge: 1 };
   for (const type of ['cabin', 'forester', 'sawmill', 'kiln', 'depot', 'workshop', 'lodge']) {
     if (!unlocked(type) || countB(type) >= caps[type] || !fullOf(type)) continue;
     const c = buildCost(type);
     add(c.coins, c.wood, () => {
-      const far = type === 'depot' ? RINGS[top] + 3 : 0, ang = countB(type) * 2.4 + 0.5;
+      const far = type === 'depot' ? RINGS[top] + 4 : 0, ang = far ? (countB(type) ? 0.25 : -0.25) : countB(type) * 2.4 + 0.5;
       const spot = botFindSpot(type, Math.round(CX + Math.cos(ang) * (far || 7 + countB(type) * 1.5 + S.buildings.length)), Math.round(CY + Math.sin(ang) * (far || 7 + S.buildings.length)));
       return spot && placeBuilding(type, spot[0], spot[1]);
     }, type);
@@ -81,7 +91,14 @@ function botThink() {
   const short = [];
   for (let t = 0; t < NT; t++) if (t < S.crewAxe && keep[LOG(t)] + feed[LOG(t)] > S.inv[LOG(t)]) short.push(t);
   const cs = cabins();
-  cs.forEach((c, k) => { const want = cs.length > 1 && k < short.length && k < cs.length - 1 ? short[k] : top; if (c.wood !== want) setWood(c.id, want); });
+  cs.forEach((c, k) => {
+    const want = cs.length > 1 && k < short.length && k < cs.length - 1 ? short[k] : top; if (c.wood !== want) setWood(c.id, want);
+    // a cabin lives beside the wood it cuts: over the bridges, just past the last river it needs
+    if (want > 0 && S.playTime - (c.movedAt || -999) > 240) {
+      const tx = Math.round(CX + RINGS[want] + 5), ty = CY + (k % 5 - 2) * 3;
+      if (Math.hypot(c.x - tx, c.y - ty) > 16) { const spot = botFindSpot('cabin', tx, ty); if (spot && Math.hypot(spot[0] - tx, spot[1] - ty) < 14) { moveBuilding(c.id, spot[0], spot[1]); c.movedAt = S.playTime; } }
+    }
+  });
   const pShort = []; for (let t = NT - 1; t >= 0; t--) if (keep[PLANK(t)] + feed[PLANK(t)] > S.inv[PLANK(t)]) pShort.push(t);
   S.buildings.filter(b => b.type === 'sawmill').forEach((m, k) => { const want = k < pShort.length ? pShort[k] : -1; if (m.wood !== want) setWood(m.id, want); });
   const fShort = []; for (let t = NT - 1; t >= 0; t--) if (keep[FURN(t)] > S.inv[FURN(t)]) fShort.push(t);
@@ -108,7 +125,7 @@ window.runBot = async function (maxHours = 60, dt = 0.1) {
     if (S.playTime >= nextSnap) {
       nextSnap += 1800;
       const roles = {}; for (const w of S.workers) roles[w.role] = (roles[w.role] || 0) + 1;
-      B.log.push({ h: hrs(), coins: Math.round(S.coins), earned: Math.round(S.stats.earned), crew: S.workers.length, roles, cabins: countB('cabin'), axe: S.axe + '/' + S.crewAxe, lodge: S.lodgeStage, hats: S.hats.length, goal: (curGoal() || {}).id });
+      B.log.push({ h: hrs(), coins: Math.round(S.coins), earned: Math.round(S.stats.earned), crew: S.workers.length, roles, cabins: countB('cabin'), axe: S.axe + '/' + S.crewAxe, reach: S.reach, lodge: S.lodgeStage, hats: S.hats.length, goal: (curGoal() || {}).id });
     }
     await new Promise(r => setTimeout(r, 0));
   }

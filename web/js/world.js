@@ -1,47 +1,53 @@
 // MeepleJacks — the forest, the simulation (you and every kind of crew), orders, the Great Lodge and saving.
 'use strict';
 
+let SEA = 0;       // the season just now: 0 spring, 1 summer, 2 autumn, 3 winter
 let S = null;      // saved state
 let W = null;      // the generated map and other things rebuilt on load
 const EV = [];     // events for the renderer, UI and audio
 const idx = (x, y) => y * MW + x;
 const inMap = (x, y) => x >= 0 && y >= 0 && x < MW && y < MH;
-const TER = { GRASS: 0, WATER: 1, ROCK: 2 };
+const TER = { GRASS: 0, WATER: 1, ROCK: 2, BRIDGE: 3 };
 const SAVE_KEY = s => 'meeplejacks_slot' + s;
 const YARD_X = (CX + 0.5) * TS, YARD_Y = (CY - 0.5) * TS;   // middle of the Lumber Yard
 
 // ---------------------------------------------------------------- terrain (shared with the renderer; pixel coords)
 function waterV(px, py, seed) {
-  const d = Math.hypot(px - YARD_X, py - YARD_Y) / TS;
-  return fbm(px / 300, py / 300, seed + 3, 3) - 0.715 - Math.max(0, 18 - d) * 0.03;
+  const d = Math.hypot(px - YARD_X, py - YARD_Y) / TS, edge = Math.min(px, py, MW * TS - px, MH * TS - py) / TS;
+  return fbm(px / 300, py / 300, seed + 3, 3) - 0.715 - Math.max(0, 18 - d) * 0.03 - Math.max(0, 5 - edge) * 0.1;
 }
 // distance from the yard in tiles, wobbled so the rings aren't perfect circles
 function zoneD(px, py, seed) {
   return Math.hypot(px - YARD_X, py - YARD_Y) / TS + (fbm(px / 224, py / 224, seed + 7, 3) - 0.5) * 9;
 }
 function ringOf(dd) { let r = 0; while (r < NT - 1 && dd >= RINGS[r + 1]) r++; return r; }
+// Rivers run where one ring meets the next. riverE: how far inside a river a spot is, in tiles (positive in the water).
+function riverE(dd) { let e = -99; for (let k = 1; k < NT; k++) { const v = RIVER_HALF - Math.abs(dd - RINGS[k]); if (v > e) e = v; } return e; }
+function riverK(dd) { let k = 1; for (let j = 2; j < NT; j++) if (Math.abs(dd - RINGS[j]) < Math.abs(dd - RINGS[k])) k = j; return k; }
+// Ponds and rivers together, on the ponds' scale. Ponds shrink away from the rivers so that a ring is never cut in two.
+function wetV(wv, dd) { const e = riverE(dd); return Math.max(wv - Math.max(0, 4.5 + e) * 0.1, e * 0.03); }
+const seasonNow = () => Math.floor(S.playTime / SEASON_LEN) % 4;
+const yearNow = () => Math.floor(S.playTime / (SEASON_LEN * 4)) + 1;
 
 function genMap(seed) {
   W = {
     kind: new Uint8Array(NTILES), g: new Float32Array(NTILES), ter: new Uint8Array(NTILES), block: new Uint8Array(NTILES),
     vr: new Uint8Array(NTILES), jx: new Int8Array(NTILES), jy: new Int8Array(NTILES), orig: null,
+    reg: new Uint8Array(NTILES),     // which ring a tile is in: the number of rivers between it and the yard
+    riv: new Uint8Array(NTILES),     // for river water, which river (1 is the innermost)
+    anc: [], ancSlots: [], ancShake: [],
     hp: new Map(), claim: new Map(), shake: new Map(), growing: new Set(), pileAt: new Map(), pileById: new Map(), bById: new Map(),
     dirty: [],     // tiles whose look changed, for the zoomed-out tree cache
   };
   for (let y = 0; y < MH; y++) for (let x = 0; x < MW; x++) {
     const i = idx(x, y), px = x * TS + 8, py = y * TS + 8;
-    const d = Math.hypot(px - YARD_X, py - YARD_Y) / TS, wv = waterV(px, py, seed);
-    if (wv > -0.004) { W.ter[i] = TER.WATER; continue; }
+    const d = Math.hypot(px - YARD_X, py - YARD_Y) / TS, dd = zoneD(px, py, seed), re = riverE(dd) * 0.03, wv = wetV(waterV(px, py, seed), dd);
+    const r = W.reg[i] = ringOf(dd);
+    if (wv > -0.004) { W.ter[i] = TER.WATER; if (re > -0.004) W.riv[i] = riverK(dd); continue; }
     if (d > 7 && wv < -0.04 && hash2(x, y, seed + 2) < 0.005) { W.ter[i] = TER.ROCK; W.vr[i] = (hash2(x, y, seed + 4) * 3) | 0; continue; }
     if (d < 4.2 || wv > -0.03) continue;
     let dens = 0.2 + 0.42 * fbm(x / 9, y / 9, seed + 11, 2);
     if (d < 8.5) dens *= (d - 4.2) / 4.3;
-    const dd = zoneD(px, py, seed);
-    let r = ringOf(dd);
-    // rings bleed into each other a little at their borders
-    const lo = RINGS[r], hi = r < NT - 1 ? RINGS[r + 1] : 1e9, h = hash2(x, y, seed + 9);
-    if (r < NT - 1 && hi - dd < 3 && h < (3 - (hi - dd)) / 6) r++;
-    else if (r > 0 && dd - lo < 3 && h < (3 - (dd - lo)) / 6) r--;
     dens *= DENSITY[r];
     if (hash2(x, y, seed + 5) < dens) {
       W.kind[i] = r + 1; W.g[i] = 1;
@@ -49,10 +55,48 @@ function genMap(seed) {
       W.jx[i] = ((hash2(x, y, seed + 21) * 7) | 0) - 3; W.jy[i] = ((hash2(x, y, seed + 22) * 5) | 0) - 2;
     }
   }
+  placeAncients(seed);
   W.orig = W.kind.slice();
 }
+// One Ancient tree per ring, in a glade of its own about halfway across the ring.
+function placeAncients(seed) {
+  const dry = (bx, by, r) => {
+    if (bx < 6 || by < 13 || bx >= MW - 6 || by >= MH - 6) return false;
+    for (let yy = -2; yy <= 2; yy++) for (let xx = -2; xx <= 2; xx++) { const n = idx(bx + xx, by + yy); if (W.ter[n] || W.reg[n] !== r) return false; }
+    return true;
+  };
+  for (let r = 0; r < NT; r++) {
+    const lo = Math.max(RINGS[r], 6) + 3.5, hi = (r < NT - 1 ? RINGS[r + 1] : RINGS[r] + 9) - 3.5, want = (lo + hi) / 2;
+    let found = -1;
+    for (let j = 0; j < 60 && found < 0; j++) {
+      const a = hash2(r, 7, seed + 71) * 6.283 + j * 2.4;
+      let best = -1, bd = 1e9;          // walk out along the ray to where the wobbled distance is right
+      for (let rad = Math.max(4, want - 8); rad <= want + 8; rad += 0.5) {
+        const x = Math.round(CX + 0.5 + Math.cos(a) * rad), y = Math.round(CY - 0.5 + Math.sin(a) * rad);
+        if (!inMap(x, y)) continue;
+        const e = Math.abs(zoneD(x * TS + 8, y * TS + 8, seed) - want);
+        if (e < bd) { bd = e; best = idx(x, y); }
+      }
+      if (best >= 0 && bd < 1.5 && dry(best % MW, (best / MW) | 0, r)) found = best;
+    }
+    if (found < 0) {                    // nowhere on the rays: take the best dry spot anywhere in the ring
+      let bd = 1e9;
+      for (let i = 0; i < NTILES; i++) {
+        if (W.reg[i] !== r || W.ter[i]) continue;
+        const x = i % MW, y = (i / MW) | 0, e = Math.abs(zoneD(x * TS + 8, y * TS + 8, seed) - want);
+        if (e < bd && dry(x, y, r)) { bd = e; found = i; }
+      }
+    }
+    if (found < 0) found = idx(CX + 8 + r * 12, CY);
+    const tx = found % MW, ty = (found / MW) | 0;
+    W.anc[r] = { i: found, x: tx * TS + 8, y: ty * TS + 12 };
+    W.ancSlots[r] = new Array(ANCIENT_CREW).fill(0); W.ancShake[r] = 0;
+    for (let yy = -3; yy <= 3; yy++) for (let xx = -3; xx <= 3; xx++) if (xx * xx + yy * yy <= 10 && inMap(tx + xx, ty + yy)) { const n = idx(tx + xx, ty + yy); W.kind[n] = 0; W.g[n] = 0; if (W.ter[n] === TER.ROCK) W.ter[n] = 0; }
+  }
+}
 function rebuildBlocks() {
-  for (let i = 0; i < NTILES; i++) W.block[i] = W.ter[i] ? 1 : 0;
+  for (let i = 0; i < NTILES; i++) W.block[i] = W.ter[i] === TER.WATER || W.ter[i] === TER.ROCK ? 1 : 0;
+  for (const A of W.anc) W.block[A.i] = 1;          // the trunk of an Ancient tree, or its stump
   W.bById.clear();
   for (const b of S.buildings) {
     W.bById.set(b.id, b);
@@ -87,18 +131,26 @@ const cabinBeds = () => BUILD.cabin.beds + (lodgeDone(1) ? 1 : 0) + (lodgeDone(3
 const bedsOf = b => b.type === 'cabin' ? cabinBeds() : b.type === 'lodge' ? BUILD.lodge.beds + (S.lodgeStage >> 1) : (BUILD[b.type].beds || 0);
 const playerCap = () => PLAYER_CARRY + S.pack;
 const playerSpeed = () => PLAYER_SPEED * (1 + 0.12 * S.boots);
-const crewSpeed = (w, home) => CREW_SPEED * (1 + 0.12 * S.crewBoots) * (lodgeDone(2) ? 1.1 : 1) * (home && home.foreman ? 1.3 : 1) * (w.role === 'carter' ? 1.15 : 1);
-const haulerCap = () => HAULER_CARRY + 2 * S.crewPack + (lodgeDone(6) ? 4 : 0);
-const carterCap = () => CARTER_CARRY + 12 * S.carts;
-const craftSpeed = role => (role === 'sawyer' ? 1 + 0.3 * S.blades : role === 'carpenter' ? 1 + 0.3 * S.chisels : 1) * (lodgeDone(4) ? 1.25 : 1);
-const craftBatch = role => role === 'sawyer' ? 6 + 2 * S.blades : role === 'carpenter' ? 6 + 2 * S.chisels : 9;
+// quirks, skill and the season: wPace is how much faster a Meeple is at everything it does
+const quirk = (w, q) => !!w && w.quirk === q;
+const wPace = w => (1 + SKILL_BONUS * (w.lvl || 0)) * (w.quirk === 'snow' && SEA === 3 ? 1.3 : 1) * (w.quirk === 'sun' && SEA === 1 ? 1.3 : 1);
+const sledding = w => SEA === 3 && (w.role === 'hauler' || w.role === 'carter');
+const crewSpeed = (w, home) => CREW_SPEED * (1 + 0.12 * S.crewBoots) * (lodgeDone(2) ? 1.1 : 1) * (home && home.foreman ? 1.3 : 1) * (w.role === 'carter' ? 1.15 : 1)
+  * wPace(w) * (w.quirk === 'quick' ? 1.2 : 1) * (sledding(w) ? 1.25 : 1);
+const haulerCap = w => HAULER_CARRY + 2 * S.crewPack + (lodgeDone(6) ? 4 : 0) + (quirk(w, 'strong') ? 3 : 0);
+const carterCap = w => CARTER_CARRY + 12 * S.carts + (quirk(w, 'strong') ? 8 : 0);
+const craftSpeed = role => (role === 'sawyer' ? 1 + 0.3 * S.blades : role === 'carpenter' ? 1 + 0.3 * S.chisels : 1) * (lodgeDone(4) ? 1.25 : 1) * (SEA === 1 ? 1.2 : 1);
+const benchPace = w => wPace(w) * (w.quirk === 'nimble' ? 1.25 : 1);
+const craftBatch = (role, w) => (role === 'sawyer' ? 6 + 2 * S.blades : role === 'carpenter' ? 6 + 2 * S.chisels : 9) + (quirk(w, 'strong') ? (RECIPE[role].per === 3 ? 3 : 2) : 0);
+const builderCap = w => BUILDER_CARRY + (quirk(w, 'strong') ? 2 : 0);
+const restPace = w => w.quirk === 'early' ? 2 : w.quirk === 'dreamer' ? 0.5 : 1;
 const plantTo = () => Math.min(0.9, 0.5 + 0.1 * S.seeds);
 
 // ---------------------------------------------------------------- new game
 function blankState(slot, seed) {
   const z = n => new Array(n).fill(0);
   return {
-    v: 2, slot, seed, created: Date.now(), savedAt: 0, playTime: 0,
+    v: 3, slot, seed, created: Date.now(), savedAt: 0, playTime: 0,
     coins: 0, inv: z(NI), sold: z(NI), seen: z(NI), autosell: z(NI), keep: z(NI),
     stats: { chopped: 0, delivered: 0, sales: 0, earned: 0, cut: z(NT), made: { plank: 0, furn: 0, char: 0 }, orders: 0, planted: 0 },
     axe: 1, crewAxe: 1, boots: 0, pack: 0, crewBoots: 0, crewPack: 0, seeds: 0, blades: 0, carts: 0, chisels: 0,
@@ -106,16 +158,22 @@ function blankState(slot, seed) {
     workers: [], piles: [], goalsDone: {}, won: false, lodgeStage: 0, lodgeStep: 0,
     hats: [], hat: null, crewHat: null, gait: 0, hatPity: 0,
     orders: [], orderT: 60,
+    anc: ANCIENT_HP.map(hp => ({ hp, done: false, call: false })),      // the Ancient tree of each ring
+    bridges: [], reach: 0,                                              // reach: the outermost river bridged
     player: { x: YARD_X, y: (CY + 1) * TS + 12, face: 1, carry: [] },
   };
 }
 function resetWorker(w) {
-  Object.assign(w, { st: 'idle', path: [], wait: Math.random(), target: -1, carry: w.carry || [], res: 0, swing: 0, workT: 0, tick: 0, drop: 0, walkT: Math.random() * 3, moving: false, note: '', face: w.face || 1 });
+  Object.assign(w, { st: 'idle', path: [], wait: Math.random(), target: -1, carry: w.carry || [], res: 0, swing: 0, workT: 0, tick: 0, drop: 0, walkT: Math.random() * 3, moving: false, note: '', face: w.face || 1, anc: -1, slot: 0 });
   if (w.gait == null) w.gait = (Math.random() * GAITS.length) | 0;
+  if (!QUIRK[w.quirk]) w.quirk = QUIRKS[(Math.random() * QUIRKS.length) | 0].id;
+  w.xp = +w.xp || 0; w.lvl = skillOf(w.xp);
 }
 function resetTransient() {
   const P = S.player;
-  Object.assign(P, { st: 'idle', path: [], queue: [], own: [], auto: false, target: -1, swing: 0, pause: 0, walkT: 0, moving: false, drop: 0 });
+  Object.assign(P, { st: 'idle', path: [], queue: [], own: [], auto: false, target: -1, swing: 0, pause: 0, walkT: 0, moving: false, drop: 0, anc: -1 });
+  SEA = seasonNow();
+  for (const sl of W.ancSlots) sl.fill(0);
   P.carry = P.carry || [];
   for (const w of S.workers) { w.carry = []; resetWorker(w); }
   W.pileAt.clear(); W.pileById.clear();
@@ -198,9 +256,9 @@ function moveStep(e, dt, speed) {
   e.moving = e.path.length > 0; e.walkT += dt;
   return !e.path.length;
 }
-// The nearest tile to (cx, cy) that passes `test`, searching outward in rings with no distance limit.
-function nearestTile(cx, cy, test) {
-  let best = -1, bd = 1e9, stop = 1e9;
+// The nearest tile to (cx, cy) that passes `test`, searching outward in rings, as far as maxR tiles if that is given.
+function nearestTile(cx, cy, test, maxR = 1e9) {
+  let best = -1, bd = 1e9, stop = maxR;
   const look = (x, y) => {
     if (x < 0 || y < 0 || x >= MW || y >= MH) return;
     const i = y * MW + x; if (!test(i)) return;
@@ -212,7 +270,7 @@ function nearestTile(cx, cy, test) {
     if (x0 < 0 && y0 < 0 && x1 >= MW && y1 >= MH) break;
     for (let x = x0; x <= x1; x++) { look(x, y0); if (r) look(x, y1); }
     for (let y = y0 + 1; y < y1; y++) { look(x0, y); look(x1, y); }
-    if (best >= 0 && stop === 1e9) stop = Math.ceil(r * 1.42) + 1;
+    if (best >= 0 && stop === maxR) stop = Math.min(maxR, Math.ceil(r * 1.42) + 1);
   }
   return best;
 }
@@ -238,14 +296,149 @@ function fellTree(i, who) {
   S.stats.chopped++; S.stats.cut[k - 1]++; S.seen[k - 1] = 1;
   EV.push({ t: 'fall', x: p.x, y: p.y, k, v: W.vr[i], dir: who.x < p.x ? 1 : -1, me });
   // a hat may be hiding in the branches
-  const pool = HATS.filter(h => h.tree === k - 1 && !S.hats.includes(h.id));
+  const pool = HATS.filter(h => (h.tree === k - 1 || h.season === SEA) && !S.hats.includes(h.id));
   if (pool.length) {
-    const chance = me ? 0.04 + 0.012 * S.hatPity : 0.006;
+    const chance = (me ? 0.04 + 0.012 * S.hatPity : who.quirk === 'magnet' ? 0.036 : 0.006) * (SEA === 2 ? 2 : 1);
     if (Math.random() < chance) { const h = pool[(Math.random() * pool.length) | 0]; S.hats.push(h.id); if (me) S.hatPity = 0; EV.push({ t: 'hat', hat: h, x: p.x, y: p.y, me: true }); }
     else if (me) S.hatPity++;
   }
   return pile;
 }
+
+// ---------------------------------------------------------------- Ancient trees
+const ancLeft = () => S.anc.filter(a => !a.done).length;
+const ANC_SLOT = [[11, 3], [17, 1], [13, 8], [22, 4], [19, 10], [25, 2]];        // all in front of the trunk, so nobody hides behind it
+// where the lumberjack in a slot stands: alternate sides of the trunk
+function ancSpot(r, slot) { const A = W.anc[r], side = slot & 1 ? 1 : -1, o = ANC_SLOT[(slot >> 1) % ANC_SLOT.length]; return { x: A.x + side * o[0], y: A.y + o[1] }; }
+// a called Ancient tree with room for one more axe: [ring, slot], or null
+function ancJob() {
+  for (let r = 0; r <= S.reach && r < NT; r++) {
+    const A = S.anc[r];
+    if (!A.call || A.done || !canCut(S.crewAxe, r + 1)) continue;
+    const s = W.ancSlots[r].indexOf(0);
+    if (s >= 0) return [r, s];
+  }
+  return null;
+}
+function hitAncient(r, dmg, who) {
+  const A = S.anc[r], T = W.anc[r]; if (A.done) return true;
+  A.hp -= dmg; W.ancShake[r] = 0.22;
+  EV.push({ t: 'chop', x: T.x, y: T.y, k: r + 1, side: who.x < T.x ? -1 : 1, me: who === S.player, anc: 1 });
+  if (A.hp > 0) return false;
+  fellAncient(r, who); return true;
+}
+function fellAncient(r, who) {
+  const A = S.anc[r], T = W.anc[r];
+  A.hp = 0; A.done = true; A.call = false;
+  let i = T.i + MW; if (W.pileAt.has(i) || W.block[i]) i = T.i + MW + 1;          // the heap lands in front of the stump
+  const pile = { id: S.nextId++, i, type: r, n: ANCIENT_LOGS[r], res: 0, t: 1.5 };
+  S.piles.push(pile); W.pileAt.set(i, pile); W.pileById.set(pile.id, pile);
+  S.stats.chopped++; S.stats.cut[r]++; S.seen[r] = 1;
+  EV.push({ t: 'fall', x: T.x, y: T.y, k: r + 1, anc: r, dir: who.x < T.x ? 1 : -1, me: true });
+  // there is always a hat in an Ancient tree, as long as one is left to find
+  const mine = HATS.filter(h => h.tree === r && !S.hats.includes(h.id)), any = HATS.filter(h => h.tree >= 0 && !S.hats.includes(h.id));
+  const pool = mine.length ? mine : any, hat = pool.length ? pool[(Math.random() * pool.length) | 0] : null;
+  if (hat) S.hats.push(hat.id);
+  EV.push({ t: 'ancient', r, hat, x: T.x, y: T.y });
+}
+function callCrew(r, on) {
+  const A = S.anc[r]; if (!A || A.done) return false;
+  A.call = !!on;
+  if (on) for (const w of S.workers) if (w.role === 'jack' && (w.st === 'idle' || w.st === 'home')) w.wait = Math.min(w.wait, Math.random() * 0.5);
+  return true;
+}
+// returns: ok | done | river | tough
+function cmdAncient(r) {
+  const P = S.player, A = S.anc[r], T = W.anc[r];
+  if (A.done) return 'done';
+  if (r > S.reach) return 'river';
+  if (!canCut(S.axe, r + 1)) return 'tough';
+  P.auto = true; P.queue = []; P.anc = r; P.st = 'toAnc';
+  const side = P.x < T.x ? -1 : 1; goTo(P, T.x + side * 10, T.y + 6);
+  return 'ok';
+}
+
+// ---------------------------------------------------------------- rivers and bridges
+const canReach = i => W.reg[i] <= S.reach;
+const bridgesOver = k => S.bridges.reduce((n, b) => n + (b.k === k ? 1 : 0), 0);
+function applyBridge(b) {
+  for (let yy = 0; yy < b.h; yy++) for (let xx = 0; xx < b.w; xx++) {
+    const i = idx(b.x + xx, b.y + yy);
+    W.ter[i] = TER.BRIDGE; W.orig[i] = 0;
+    if (W.kind[i]) { W.kind[i] = 0; W.growing.delete(i); W.hp.delete(i); W.claim.delete(i); W.dirty.push(i); }
+  }
+}
+// why no bridge over river k can be started yet, or '' if one can
+function bridgeLock(k) {
+  if (k > S.reach + 1) return 'Bridge the ' + RIVER_NAMES[k - 1] + ' River first';
+  if (k === S.reach + 1 && !S.anc[k - 1].done) return 'Fell the Ancient ' + TREES[k - 1].name + ' first';
+  return '';
+}
+// The bridge that would cross the river nearest to tile (tx, ty): two tiles wide, straight across, bank to bank.
+// Returns null when no river is near, else { k, x, y, w, h, v, ok, why, cost }.
+function planBridge(tx, ty) {
+  const i0 = nearestTile(tx, ty, i => W.riv[i] > 0, 7);
+  if (i0 < 0) return null;
+  const k = W.riv[i0], cx = i0 % MW, cy = (i0 / MW) | 0, px = cx * TS + 8, py = cy * TS + 8;
+  const gx = zoneD(px + TS, py, S.seed) - zoneD(px - TS, py, S.seed), gy = zoneD(px, py + TS, S.seed) - zoneD(px, py - TS, S.seed);
+  const v = Math.abs(gy) > Math.abs(gx) ? 1 : 0;       // 1: the bridge runs north to south
+  const tile = (a, c) => v ? (inMap(c, a) ? idx(c, a) : -1) : (inMap(a, c) ? idx(a, c) : -1);      // a: along the bridge, c: across it
+  const wet = (a, c) => { const i = tile(a, c); return i >= 0 && W.ter[i] === TER.WATER; };
+  const a0 = v ? cy : cx, c0 = v ? cx : cy;
+  let lo = 1e9, hi = -1e9;
+  for (const c of [c0, c0 + 1]) {
+    let st = a0;
+    if (!wet(st, c)) {            // on a slanting river the second lane starts a tile or two along
+      st = null;
+      for (let d = 1; d <= 3 && st === null; d++) { if (wet(a0 + d, c)) st = a0 + d; else if (wet(a0 - d, c)) st = a0 - d; }
+      if (st === null) continue;
+    }
+    let l = st, h = st;
+    while (wet(l - 1, c) && st - l < 30) l--;
+    while (wet(h + 1, c) && h - st < 30) h++;
+    lo = Math.min(lo, l); hi = Math.max(hi, h);
+  }
+  const len = hi - lo + 1, b = v ? { k, x: c0, y: lo, w: 2, h: len, v } : { k, x: lo, y: c0, w: len, h: 2, v };
+  b.tx = tx; b.ty = ty; b.cost = bridgeCost(k, bridgesOver(k));
+  b.why = bridgeLock(k);
+  if (!b.why) {
+    if (len > BRIDGE_MAX) b.why = 'The water is too wide here';
+    else {
+      const land = (a, c) => { const i = tile(a, c); return i >= 0 && W.ter[i] === TER.GRASS && !W.block[i] ? W.reg[i] : -1; };
+      const A = land(lo - 1, c0), A2 = land(lo - 1, c0 + 1), B = land(hi + 1, c0), B2 = land(hi + 1, c0 + 1);
+      if (A < 0 || B < 0 || A !== A2 || B !== B2 || Math.min(A, B) !== k - 1 || Math.max(A, B) !== k) b.why = 'The banks are awkward here. Try a straighter stretch';
+      else for (let a = lo; a <= hi && !b.why; a++) for (const c of [c0, c0 + 1]) {
+        const i = tile(a, c);
+        if (i < 0 || W.ter[i] === TER.ROCK || W.ter[i] === TER.BRIDGE || (W.block[i] && W.ter[i] !== TER.WATER) || W.pileAt.has(i)) { b.why = 'Something is in the way here'; break; }
+      }
+    }
+  }
+  b.ok = !b.why;
+  return b;
+}
+// a place for a bridge over river k, as near to tile (nx, ny) as can be found
+function findBridgeSpot(k, nx, ny) {
+  if (bridgeLock(k)) return null;
+  let plan = null;
+  nearestTile(clamp(nx, 0, MW - 1), clamp(ny, 0, MH - 1), i => {
+    if (W.riv[i] !== k) return false;
+    const p = planBridge(i % MW, (i / MW) | 0);
+    if (p && p.k === k && p.ok) { plan = p; return true; }
+    return false;
+  });
+  return plan;
+}
+function buildBridge(plan) {
+  const b = plan && planBridge(plan.tx, plan.ty);
+  if (!b || !b.ok || !canAfford(b.cost)) return null;
+  pay(b.cost);
+  const first = b.k > S.reach, br = { k: b.k, x: b.x, y: b.y, w: b.w, h: b.h, v: b.v };
+  S.bridges.push(br); applyBridge(br); rebuildBlocks();
+  S.reach = Math.max(S.reach, b.k);
+  EV.push({ t: 'bridge', k: b.k, first, x: (b.x + b.w / 2) * TS, y: (b.y + b.h / 2) * TS });
+  return br;
+}
+
 function takeFromPile(e, pile, want) {
   const n = Math.min(want, pile.n);
   for (let k = 0; k < n; k++) e.carry.push(pile.type);
@@ -300,10 +493,11 @@ function startChop(e, i) {
   const p = treeXY(i), side = e.x < p.x ? -1 : 1;
   e.target = i; e.st = 'toTree'; goTo(e, p.x + side * 7, p.y + 2);
 }
-// returns: ok | queued | unqueue | same | young | tough | none | full
+// returns: ok | queued | unqueue | same | young | tough | none | full | river
 function cmdChop(i) {
   const P = S.player, k = W.kind[i];
   if (!k) return 'none';
+  if (!canReach(i)) return 'river';
   if (W.g[i] < 1) return 'young';
   if (!canCut(S.axe, k)) return 'tough';
   P.auto = true;
@@ -326,8 +520,10 @@ function cmdDrop(b) {
   P.auto = true; P.queue = []; goDrop(P, b); return true;
 }
 function cmdWalk(x, y) {
-  const P = S.player;
+  const P = S.player, tx = Math.floor(x / TS), ty = Math.floor(y / TS);
+  if (inMap(tx, ty) && !canReach(idx(tx, ty))) return false;
   P.auto = false; P.queue = []; P.st = 'walk'; goTo(P, x, y);
+  return true;
 }
 function goPile(e, pile) {
   const p = pileXY(pile), side = e.x < p.x ? -1 : 1;
@@ -379,11 +575,21 @@ function updPlayer(dt) {
       break;
     }
     case 'toYard': if (moveStep(P, dt, sp)) { deposit(P); P.st = 'idle'; P.pause = 0.2; } break;
+    case 'toAnc':
+      if (!S.anc[P.anc] || S.anc[P.anc].done) { P.st = 'idle'; break; }
+      if (moveStep(P, dt, sp)) { P.st = 'chopAnc'; P.swing = PLAYER_SWING * 0.6; P.face = W.anc[P.anc].x > P.x ? 1 : -1; }
+      break;
+    case 'chopAnc':
+      P.moving = false;
+      if (!S.anc[P.anc] || S.anc[P.anc].done) { P.st = 'idle'; P.auto = false; break; }
+      if (P.swing <= 0) { P.swing += PLAYER_SWING; if (hitAncient(P.anc, S.axe, P)) { P.st = 'idle'; P.auto = false; P.pause = 0.8; P.swing = 0; } }
+      break;
   }
 }
 
 // ---------------------------------------------------------------- the crew
 function releaseWorker(w) {
+  if (w.anc >= 0) { const sl = W.ancSlots[w.anc]; if (sl && sl[w.slot] === w.id) sl[w.slot] = 0; w.anc = -1; }
   if ((w.role === 'jack' || w.role === 'forester') && w.target >= 0 && W.claim.get(w.target) === w.id) W.claim.delete(w.target);
   if (w.role === 'hauler' && w.res) { const p = W.pileById.get(w.target); if (p) p.res = Math.max(0, p.res - w.res); w.res = 0; }
   if (w.role === 'builder' && w.carry.length) { const b = W.bById.get(w.home); for (const it of w.carry) { S.inv[it]++; if (b && b.tr[it]) b.tr[it]--; } w.carry = []; }
@@ -426,14 +632,21 @@ function tryJob(w, home) {
   if (w.carry.length && w.role !== 'hauler') { goDrop(w, yard()); w.note = 'Taking a load to the yard'; return true; }
   switch (w.role) {
     case 'jack': {
-      const want = home.wood;
+      const aj = ancJob();
+      if (aj) {           // the call has gone out: every free axe to the Ancient tree
+        const [r, sl] = aj, p = ancSpot(r, sl);
+        W.ancSlots[r][sl] = w.id; w.anc = r; w.slot = sl; w.st = 'toAnc'; goTo(w, p.x, p.y);
+        w.note = 'Off to the Ancient ' + TREES[r].name; return true;
+      }
+      const want = home.wood, top = Math.min(S.crewAxe, S.reach + 1);
       if (want >= 0 && !canCut(S.crewAxe, want + 1)) { w.note = 'Needs the ' + AXES[want + 1].name + ' to cut ' + TREES[want].name; return false; }
-      const i = nearestTile(hx, hy, t => W.kind[t] > 0 && W.g[t] >= 1 && (want < 0 ? W.kind[t] <= S.crewAxe : W.kind[t] === want + 1) && !W.claim.has(t) && !(P.target === t && (P.st === 'chop' || P.st === 'toTree')));
+      if (want > S.reach) { w.note = 'The ' + RIVER_NAMES[want] + ' River is in the way of the ' + TREES[want].name; return false; }
+      const i = nearestTile(hx, hy, t => W.kind[t] > 0 && W.g[t] >= 1 && (want < 0 ? W.kind[t] <= top : W.kind[t] === want + 1) && !W.claim.has(t) && !(P.target === t && (P.st === 'chop' || P.st === 'toTree')));
       if (i < 0) { w.note = 'Waiting for ' + (want >= 0 ? TREES[want].name : 'trees') + ' to grow back'; return false; }
       W.claim.set(i, w.id); startChop(w, i); w.note = 'Off to chop ' + TREES[W.kind[i] - 1].name; return true;
     }
     case 'hauler': {
-      const room = haulerCap() - w.carry.length;
+      const room = haulerCap(w) - w.carry.length;
       const p = room > 0 ? findPileFor(w, home, w.carry.length ? 8 * TS : 0) : null;
       if (p) { w.res = Math.min(room, p.n - p.res); p.res += w.res; goPile(w, p); w.note = 'Fetching ' + TREES[p.type].name + ' logs'; return true; }
       if (w.carry.length) { goDrop(w); w.note = 'Hauling ' + w.carry.length + ' logs in'; return true; }
@@ -442,14 +655,14 @@ function tryJob(w, home) {
     }
     case 'forester': {
       const want = home.wood;
-      const i = nearestTile(hx, hy, t => W.kind[t] > 0 && W.g[t] < 0.45 && (want < 0 || W.kind[t] === want + 1) && !W.pileAt.has(t) && !W.claim.has(t));
+      const i = nearestTile(hx, hy, t => W.kind[t] > 0 && W.g[t] < 0.45 && W.reg[t] <= S.reach && (want < 0 || W.kind[t] === want + 1) && !W.pileAt.has(t) && !W.claim.has(t));
       if (i < 0) { w.note = 'No stumps to replant'; return false; }
       W.claim.set(i, w.id); startChop(w, i); w.note = 'Off to replant ' + TREES[W.kind[i] - 1].name; return true;
     }
     case 'carter': {
       const d = bDoor(home);
       if (Math.hypot(d.x - w.x, d.y - w.y) > 26) { w.st = 'load'; goTo(w, d.x - 8 + Math.random() * 16, d.y + Math.random() * 4); w.note = 'Heading back to the depot'; return true; }
-      const load = depotLoad(home), cap = carterCap();
+      const load = depotLoad(home), cap = carterCap(w);
       w.tick += 1;
       if (load <= 0 || (load < Math.min(cap, 12) && w.tick < 6)) { w.note = load ? 'Waiting for a fuller load' : 'The depot is empty'; return false; }
       w.tick = 0;
@@ -466,14 +679,20 @@ function tryJob(w, home) {
     }
   }
 }
+// seconds between a lumberjack's swings
+const crewSwing = (w, home) => CREW_SWING / ((home.foreman ? 1.3 : 1) * wPace(w) * (w.quirk === 'swing' ? 1.25 : 1));
 function updWorker(w, dt) {
-  const home = W.bById.get(w.home), sp = crewSpeed(w, home), boss = home.foreman ? 1.3 : 1;
+  const home = W.bById.get(w.home), sp = crewSpeed(w, home), boss = (home.foreman ? 1.3 : 1) * wPace(w);
   if (w.swing > 0) w.swing -= dt;
+  if (w.st !== 'idle' && w.st !== 'home') {         // time on the job
+    w.xp += w.quirk === 'dreamer' ? dt * 2 : dt;
+    if (w.lvl < SKILL.length - 1 && w.xp >= SKILL[w.lvl + 1].at) { w.lvl++; EV.push({ t: 'skill', w, x: w.x, y: w.y }); }
+  }
   switch (w.st) {
     case 'idle':
     case 'home':
       if (w.st === 'home') { if (moveStep(w, dt, sp * 0.8)) w.st = 'idle'; } else w.moving = false;
-      w.wait -= dt;
+      w.wait -= dt * restPace(w);
       if (w.wait > 0) break;
       if (!tryJob(w, home)) {
         w.wait = 1.8 + Math.random();
@@ -495,10 +714,23 @@ function updWorker(w, dt) {
     case 'chop':
       w.moving = false;
       if (!isMature(w.target)) { releaseWorker(w); w.st = 'idle'; w.wait = 0.2; break; }
-      if (w.swing <= 0) { w.swing += CREW_SWING / boss; if (hitTree(w.target, S.crewAxe, w)) { w.st = 'idle'; w.wait = 1.6 / boss; w.swing = 0; w.target = -1; } }
+      if (w.swing <= 0) { w.swing += crewSwing(w, home); if (hitTree(w.target, S.crewAxe, w)) { w.st = 'idle'; w.wait = 1.6 / boss; w.swing = 0; w.target = -1; } }
       break;
+    case 'toAnc': {
+      const A = S.anc[w.anc];
+      if (!A || A.done || !A.call) { releaseWorker(w); w.st = 'idle'; w.wait = 0.3; break; }
+      if (moveStep(w, dt, sp)) { w.st = 'chopAnc'; w.swing = CREW_SWING * 0.6 * Math.random(); w.face = W.anc[w.anc].x > w.x ? 1 : -1; w.note = 'Chopping the Ancient ' + TREES[w.anc].name; }
+      break;
+    }
+    case 'chopAnc': {
+      w.moving = false;
+      const A = S.anc[w.anc];
+      if (!A || A.done || !A.call) { releaseWorker(w); w.st = 'idle'; w.wait = 0.6 + Math.random(); break; }
+      if (w.swing <= 0) { w.swing += crewSwing(w, home); hitAncient(w.anc, S.crewAxe, w); }
+      break;
+    }
     case 'plant': {
-      w.moving = false; w.workT -= dt * boss;
+      w.moving = false; w.workT -= dt * boss * (w.quirk === 'thumb' ? 2 : 1);
       if (w.workT > 0) break;
       const i = w.target;
       if (W.kind[i] > 0 && W.g[i] < plantTo() && !W.pileAt.has(i)) { setGrow(i, plantTo()); S.stats.planted++; const p = treeXY(i); EV.push({ t: 'plant', x: p.x, y: p.y, k: W.kind[i] }); }
@@ -523,7 +755,7 @@ function updWorker(w, dt) {
         if (!moveStep(w, dt, sp)) break;
         const st = lodgeStep();
         if (st) for (const [it, n] of st.need) {
-          const take = Math.min(BUILDER_CARRY - w.carry.length, S.inv[it], n - (home.got[it] || 0) - (home.tr[it] || 0));
+          const take = Math.min(builderCap(w) - w.carry.length, S.inv[it], n - (home.got[it] || 0) - (home.tr[it] || 0));
           if (take > 0) { S.inv[it] -= take; home.tr[it] = (home.tr[it] || 0) + take; for (let k = 0; k < take; k++) w.carry.push(it); }
         }
         if (!w.carry.length) { w.st = 'idle'; w.wait = 2; break; }
@@ -534,7 +766,7 @@ function updWorker(w, dt) {
       if (moveStep(w, dt, sp)) {
         const R = RECIPE[w.role], t = pickInput(w.role, home);
         if (t < 0) { w.st = 'idle'; w.wait = 2; w.note = 'Nothing to spare in the yard'; break; }
-        const it = R.inp(t), n = Math.floor(Math.min(craftBatch(w.role), spare(it)) / R.per) * R.per;
+        const it = R.inp(t), n = Math.floor(Math.min(craftBatch(w.role, w), spare(it)) / R.per) * R.per;
         S.inv[it] -= n; for (let k = 0; k < n; k++) w.carry.push(it);
         w.target = t; w.st = 'toWork';
         const d = bDoor(home); goTo(w, d.x - 5 + Math.random() * 10, d.y + Math.random() * 3);
@@ -543,10 +775,10 @@ function updWorker(w, dt) {
       }
       break;
     case 'toWork':
-      if (w.role === 'builder') { if (moveStep(w, dt, sp)) { w.st = 'work'; w.workT = w.carry.length * BUILDER_TIME; w.tick = 0; w.note = 'Building the Lodge'; } break; }
+      if (w.role === 'builder') { if (moveStep(w, dt, sp)) { w.st = 'work'; w.workT = w.carry.length * BUILDER_TIME / benchPace(w); w.tick = 0; w.note = 'Building the Lodge'; } break; }
       if (moveStep(w, dt, sp)) {
         const R = RECIPE[w.role];
-        w.st = 'work'; w.workT = (w.carry.length / R.per) * R.time / craftSpeed(w.role); w.tick = 0; w.face = 1;
+        w.st = 'work'; w.workT = (w.carry.length / R.per) * R.time / (craftSpeed(w.role) * benchPace(w)); w.tick = 0; w.face = 1;
         w.note = w.role === 'sawyer' ? 'Sawing planks' : w.role === 'collier' ? 'Tending the kiln' : 'Building ' + FURN_NAMES[w.target] + 's';
       }
       break;
@@ -586,6 +818,18 @@ function dismiss(id) {
   for (const t of w.carry) S.inv[t]++;       // whatever they were carrying isn't lost
   S.workers.splice(k, 1);
 }
+// move a Meeple to another job: any building with a free place, at no cost
+function reassign(id, homeId, role) {
+  const w = S.workers.find(x => x.id === id), home = W.bById.get(homeId);
+  if (!w || !home || !(BUILD[home.type].roles || []).includes(role)) return false;
+  if (w.home === homeId && w.role === role) return false;
+  if (w.home !== homeId && crewOf(homeId).length >= bedsOf(home)) return false;
+  releaseWorker(w); w.res = 0;
+  for (const t of w.carry) S.inv[t]++;
+  w.carry = []; w.home = homeId; w.role = role; w.col = w.col || 0;
+  resetWorker(w); w.wait = 0.5; w.note = 'Starting a new job';
+  return true;
+}
 function buyForeman(id) {
   const b = W.bById.get(id); if (!b || b.type !== 'cabin' || b.foreman) return false;
   const c = foremanCost(countForemen()); if (S.coins < c) return false;
@@ -605,8 +849,9 @@ function canPlace(type, tx, ty, self) {
     const x = tx + xx, y = ty + yy;
     if (x < 2 || y < 4 || x >= MW - 2 || y >= MH - 3) return false;
     const i = idx(x, y);
-    if (W.ter[i] || (W.block[i] && !mine(x, y)) || W.pileAt.has(i) || (W.kind[i] && W.g[i] >= 0.45)) return false;
+    if (W.ter[i] || !canReach(i) || (W.block[i] && !mine(x, y)) || W.pileAt.has(i) || (W.kind[i] && W.g[i] >= 0.45)) return false;
   }
+  for (const A of W.anc) { const ax = A.i % MW, ay = (A.i / MW) | 0; if (tx <= ax + 1 && tx + B.w > ax - 1 && ty <= ay + 1 && ty + B.h > ay - 2) return false; }
   // leave room around other buildings so roofs never cover a door or the yard's front
   for (const b of S.buildings) {
     if (b === self) continue;
@@ -702,17 +947,21 @@ function newOrder() {
   for (let it = 0; it < NI; it++) if (S.seen[it] && !S.orders.some(o => o.item === it)) pool.push(it);
   if (!pool.length) return;
   pool.sort((a, b) => ITEMS[a].price - ITEMS[b].price);
-  const it = pool[Math.min(pool.length - 1, Math.floor(Math.pow(Math.random(), 0.6) * pool.length))];
+  const pick = list => list[Math.min(list.length - 1, Math.floor(Math.pow(Math.random(), 0.6) * list.length))];
+  // each season the neighbours hold a fair of their own, which wants one kind of goods and pays extra for it
+  const wanted = pool.filter(i => ITEMS[i].kind === SEASONS[SEA].want), fair = wanted.length && Math.random() < 0.4 ? SEA + 1 : 0;
+  const it = pick(fair ? wanted : pool);
   const value = Math.max(40, S.stats.earned * 0.004) * (0.5 + Math.random());
   const n = clamp(Math.round(value / ITEMS[it].price), 4, 600);
-  S.orders.push({ id: S.nextId++, item: it, n, pay: Math.round(n * ITEMS[it].price * (1.7 + Math.random() * 0.7) * (1 + 0.1 * rankPerks('pay'))), t: 600 + Math.random() * 300 });
+  S.orders.push({ id: S.nextId++, item: it, n, fair, pay: Math.round(n * ITEMS[it].price * (1.7 + Math.random() * 0.7) * (1 + 0.1 * rankPerks('pay')) * (fair ? 1.3 : 1)), t: 600 + Math.random() * 300 });
   EV.push({ t: 'order' });
 }
+const orderPay = o => Math.round(o.pay * (SEA === 2 ? 1.25 : 1));       // autumn is harvest time
 function fillOrder(id) {
   const k = S.orders.findIndex(o => o.id === id); if (k < 0) return false;
   const o = S.orders[k]; if (S.inv[o.item] < o.n) return false;
-  const before = rankOf();
-  S.inv[o.item] -= o.n; S.sold[o.item] += o.n; S.coins += o.pay; S.stats.earned += o.pay; S.stats.sales += o.n; S.stats.orders++;
+  const before = rankOf(), paid = orderPay(o);
+  S.inv[o.item] -= o.n; S.sold[o.item] += o.n; S.coins += paid; S.stats.earned += paid; S.stats.sales += o.n; S.stats.orders++;
   S.orders.splice(k, 1); S.orderT = Math.min(S.orderT, 45);
   const r = rankOf();
   if (r > before) {
@@ -742,6 +991,8 @@ function goalValue(key) {
     case 'hats': return S.hats.length;
     case 'lodge': return S.lodgeStage;
     case 'foremen': return countForemen();
+    case 'anc': return NT - ancLeft();
+    case 'reach': return S.reach;
   }
   if (key.startsWith('sold')) return S.sold[+key.slice(4)];
   if (key.startsWith('b:')) return countB(key.slice(2));
@@ -761,15 +1012,18 @@ function checkGoal() {
 let growAcc = 0, goalAcc = 0;
 function update(dt) {
   S.playTime += dt;
+  const sea = seasonNow();
+  if (sea !== SEA) { SEA = sea; EV.push({ t: 'season', s: sea }); }
   updPlayer(dt);
   for (const w of S.workers) updWorker(w, dt);
   for (const p of S.piles) if (p.t > 0) p.t -= dt;
   for (const [i, t] of W.shake) { if (t - dt <= 0) W.shake.delete(i); else W.shake.set(i, t - dt); }
+  for (let r = 0; r < NT; r++) if (W.ancShake[r] > 0) W.ancShake[r] -= dt;
   growAcc += dt;
   if (growAcc >= 0.5) {
     for (const i of W.growing) {
       if (W.pileAt.has(i)) continue;          // a stump under a log pile waits
-      const g = W.g[i] + growAcc / TREES[W.kind[i] - 1].regrow;
+      const g = W.g[i] + growAcc * SEASON_GROW[SEA] / TREES[W.kind[i] - 1].regrow;
       if (g >= 1) { setGrow(i, 1); W.growing.delete(i); } else setGrow(i, g);
     }
     tickOrders(growAcc);
@@ -787,7 +1041,7 @@ function snapshot() {
   return Object.assign({}, S, {
     inv, grow, savedAt: Date.now(),
     player: { x: Math.round(P.x), y: Math.round(P.y), face: P.face, carry: P.carry.slice() },
-    workers: S.workers.map(w => ({ id: w.id, role: w.role, home: w.home, name: w.name, col: w.col, gait: w.gait, x: Math.round(w.x), y: Math.round(w.y), face: w.face })),
+    workers: S.workers.map(w => ({ id: w.id, role: w.role, home: w.home, name: w.name, col: w.col, gait: w.gait, quirk: w.quirk, xp: Math.round(w.xp), x: Math.round(w.x), y: Math.round(w.y), face: w.face })),
     piles: S.piles.map(p => ({ id: p.id, i: p.i, type: p.type, n: p.n })),
   });
 }
@@ -812,10 +1066,13 @@ function readSlot(slot) {
 }
 function loadGame(slot) {
   const d = readSlot(slot); if (!d) return false;
-  const base = blankState(slot, d.seed), old = (d.v || 1) < 2;
+  const base = blankState(slot, d.seed), ver = d.v || 1, old = ver < 2;
   const stats = Object.assign(base.stats, d.stats);
   stats.made = Object.assign({ plank: 0, furn: 0, char: 0 }, stats.made);
-  S = Object.assign(base, d, { slot, stats, v: 2 });
+  S = Object.assign(base, d, { slot, stats, v: 3 });
+  S.anc = ANCIENT_HP.map((hp, r) => { const a = (d.anc || [])[r] || {}; return { hp: a.done ? 0 : Math.min(hp, a.hp > 0 ? a.hp : hp), done: !!a.done, call: !!a.call && !a.done }; });
+  S.bridges = (d.bridges || []).filter(b => b && b.k >= 1 && b.k < NT && b.w > 0 && b.h > 0 && inMap(b.x, b.y) && inMap(b.x + b.w - 1, b.y + b.h - 1));
+  S.reach = S.bridges.reduce((m, b) => Math.max(m, b.k), 0);
   for (const k of ['inv', 'sold', 'seen', 'autosell', 'keep']) { S[k] = (S[k] || []).slice(0, NI).map(v => +v || 0); while (S[k].length < NI) S[k].push(0); }
   while (S.stats.cut.length < NT) S.stats.cut.push(0);
   if (old) {
@@ -833,13 +1090,48 @@ function loadGame(slot) {
   }
   S.buildings = S.buildings.filter(b => BUILD[b.type]);
   genMap(S.seed);
+  for (const b of S.bridges) applyBridge(b);
   for (const k in (d.grow || {})) { const i = +k; if (W.kind[i]) { W.g[i] = d.grow[k]; W.growing.add(i); } }
   delete S.grow;
-  S.piles = (S.piles || []).filter(p => W.kind[p.i]);
-  rebuildBlocks(); W.dirty.length = 0;
+  S.piles = (S.piles || []).filter(p => inMap(p.i % MW, (p.i / MW) | 0) && !W.ter[p.i] && TREES[p.type]);
+  rebuildBlocks();
+  if (ver < 3) settleRivers();
+  W.dirty.length = 0;
   S.workers = S.workers.filter(w => W.bById.has(w.home) && ROLES[w.role]);
   resetTransient();
   return true;
+}
+// A camp saved before the rivers came: bridge every river it had already worked beyond, count the Ancient
+// trees in its way as felled, and shift any building the water now runs through.
+function settleRivers() {
+  let reach = 0, far = null, fd = 6 * TS;
+  for (let t = 0; t < NT; t++) if (S.stats.cut[t] > 0 || S.seen[t]) reach = t;
+  for (const b of S.buildings) {
+    const c = bBase(b), d = Math.hypot(c.x - YARD_X, c.y - YARD_Y);
+    reach = Math.max(reach, W.reg[idx(b.x, b.y)]);
+    if (d > fd) { fd = d; far = c; }
+  }
+  const ang = far ? Math.atan2(far.y - YARD_Y, far.x - YARD_X) : 0;
+  for (let k = 1; k <= reach; k++) {
+    S.anc[k - 1] = { hp: 0, done: true, call: false };
+    S.goalsDone['anc' + (k - 1)] = 1; S.goalsDone['bridge' + k] = 1;
+    const p = findBridgeSpot(k, Math.round(CX + Math.cos(ang) * RINGS[k]), Math.round(CY + Math.sin(ang) * RINGS[k]));
+    if (p) { const br = { k, x: p.x, y: p.y, w: p.w, h: p.h, v: p.v }; S.bridges.push(br); applyBridge(br); rebuildBlocks(); }
+    S.reach = k;
+  }
+  for (const b of S.buildings.slice(1)) {
+    const B = BUILD[b.type]; let bad = false;
+    for (let yy = 0; yy <= B.h && !bad; yy++) for (let xx = 0; xx < B.w; xx++) if (W.ter[idx(b.x + xx, Math.min(MH - 1, b.y + yy))] === TER.WATER || W.ter[idx(b.x + xx, Math.min(MH - 1, b.y + yy))] === TER.BRIDGE) { bad = true; break; }
+    for (const A of W.anc) { const ax = A.i % MW, ay = (A.i / MW) | 0; if (b.x <= ax + 1 && b.x + B.w > ax - 1 && b.y <= ay + 1 && b.y + B.h > ay - 2) bad = true; }
+    if (!bad) continue;
+    let spot = null;
+    for (let r = 1; r < 40 && !spot; r++) for (let dy = -r; dy <= r && !spot; dy++) for (let dx = -r; dx <= r; dx++) {
+      if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+      if (canPlace(b.type, b.x + dx, b.y + dy, b)) { spot = [b.x + dx, b.y + dy]; break; }
+    }
+    if (spot) { b.x = spot[0]; b.y = spot[1]; rebuildBlocks(); }
+  }
+  rebuildBlocks();
 }
 function deleteSlot(slot) {
   try { localStorage.removeItem(SAVE_KEY(slot)); } catch (e) { }

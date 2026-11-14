@@ -2,7 +2,7 @@
 // buffers: limited palettes, top-left light, ordered dithering and a dark outline.
 'use strict';
 
-const ART = { tree: [], stump: [], pile: [], log: [], carry: [], end: [], meeple: {}, rock: [], url: {}, spr: {} };
+const ART = { tree: [], trees: [], anc: [], ancStump: [], bridge: new Map(), stump: [], pile: [], log: [], carry: [], end: [], meeple: {}, rock: [], url: {}, spr: {} };
 
 function newCanvas(w, h) {
   const c = document.createElement('canvas');
@@ -108,6 +108,22 @@ const BARK = [
   PAL('#17121c', '#2a2233', '#4a3e58'),
 ];
 const TREE_OUT = ['#0c1c18', '#22381c', '#0e2214', '#3c120c', '#4a1c36', '#0a1810', '#0a0c20'];
+// Leaves through the year: [spring, summer, autumn, winter]. null keeps the usual colours.
+const SEASON_LEAF = [
+  [null, PAL('#4a7a2c', '#70a83a', '#9ccc48', '#c8e868', '#ecf8a8'), PAL('#245428', '#387a30', '#55a03c', '#7cc04c', '#aee070'), PAL('#8a3a14', '#c0581c', '#e88424', '#f8b03c', '#fcd870'), null, null, null],
+  [null, null, null, null, null, null, null],
+  [null, PAL('#8a5a14', '#c08a1c', '#e8b828', '#f8d848', '#fcf090'), PAL('#5a2a12', '#8a4418', '#b8642a', '#d88838', '#f0b458'), PAL('#5a1010', '#901a14', '#c42a18', '#e84a24', '#f88a3c'), PAL('#5a2430', '#8a3a3c', '#b85a48', '#d88458', '#f0b478'), null, null],
+  [null, PAL('#4a4a58', '#6e7080', '#9aa2b4', '#c8d4e0', '#f4f8fc'), PAL('#3e3430', '#62564e', '#94908c', '#c8ccd0', '#f2f6fa'), PAL('#4a3028', '#7a5444', '#a89088', '#d4d0d0', '#f6f8fa'), PAL('#4a3040', '#785468', '#a890a0', '#d6d0dc', '#f8f6fa'), null, null],
+];
+const SNOW = [C('#ffffff'), C('#dce8f4')];
+let TRUNK_MULT = 1, BLOSSOM = true;          // set while an Ancient tree or an autumn tree is being drawn
+const TW = n => Math.max(1, Math.round(n * TRUNK_MULT));
+// snow settles on every leaf that has open sky above it
+function snowCap(p, leaf) {
+  const set = new Set(leaf), top = [];
+  for (let y = 1; y < p.h; y++) for (let x = 0; x < p.w; x++) if (set.has(p.get(x, y)) && !(p.get(x, y - 1) >>> 24)) top.push([x, y]);
+  for (const [x, y] of top) { p.set(x, y, SNOW[0]); if (set.has(p.get(x, y + 1))) p.set(x, y + 1, hash2(x, y, 5) < 0.6 ? SNOW[0] : SNOW[1]); if (set.has(p.get(x, y + 2)) && hash2(x, y, 9) < 0.5) p.set(x, y + 2, SNOW[1]); }
+}
 const SHADOW = C('#0a1a10', 70);
 
 function shadow(p, cx, by, rx) { p.ell(cx + 0.5, by + 0.5, rx, Math.max(1.5, rx * 0.32), SHADOW); }
@@ -173,27 +189,27 @@ const TREE_DRAW = [
   // 0 pine
   (p, cx, by, s, r, seed) => {
     shadow(p, cx, by, 8 * s + 1);
-    trunk(p, cx, by - Math.round(9 * s) - 1, by, s > 0.8 ? 3 : s > 0.5 ? 2 : 1, BARK[0], seed);
+    trunk(p, cx, by - Math.round(9 * s) - 1, by, TW(s > 0.8 ? 3 : s > 0.5 ? 2 : 1), BARK[0], seed);
     conifer(p, cx, by - Math.round(39 * s), by - Math.round(6 * s) - 1, Math.max(2, Math.round(4 * s)), 10.5 * s + 1, LEAF[0], seed, r);
   },
   // 1 birch
   (p, cx, by, s, r, seed) => {
     shadow(p, cx, by, 7 * s + 1);
-    trunk(p, cx, by - Math.round(27 * s), by, s > 0.8 ? 3 : s > 0.5 ? 2 : 1, BARK[1], seed, { marks: C('#3a3a38'), furrow: 0.06 });
+    trunk(p, cx, by - Math.round(27 * s), by, TW(s > 0.8 ? 3 : s > 0.5 ? 2 : 1), BARK[1], seed, { marks: C('#3a3a38'), furrow: 0.06 });
     canopy(p, crown(r, cx + 0.5, by - 30 * s - 1, 8.5 * s + 1, 11.5 * s + 1, Math.round(4 + 4 * s), 4.2 * s + 1), LEAF[1], seed);
   },
   // 2 oak
   (p, cx, by, s, r, seed) => {
     shadow(p, cx, by, 12 * s + 1);
     const th = Math.round(15 * s);
-    trunk(p, cx, by - th, by, s > 0.8 ? 5 : s > 0.5 ? 3 : 2, BARK[2], seed);
+    trunk(p, cx, by - th, by, TW(s > 0.8 ? 5 : s > 0.5 ? 3 : 2), BARK[2], seed);
     canopy(p, crown(r, cx + 0.5, by - th - 9 * s, 15 * s + 1, 11.5 * s + 1, Math.round(5 + 4 * s), 6.2 * s + 1), LEAF[2], seed);
   },
   // 3 maple
   (p, cx, by, s, r, seed) => {
     shadow(p, cx, by, 11 * s + 1);
     const th = Math.round(16 * s), cy = by - th - 11 * s;
-    trunk(p, cx, by - th, by, s > 0.8 ? 4 : s > 0.5 ? 3 : 2, BARK[3], seed);
+    trunk(p, cx, by - th, by, TW(s > 0.8 ? 4 : s > 0.5 ? 3 : 2), BARK[3], seed);
     const bl = crown(r, cx + 0.5, cy, 13.5 * s + 1, 13 * s + 1, Math.round(5 + 4 * s), 5.6 * s + 1);
     bl.push({ x: cx + 0.5, y: cy - 11 * s, rx: 5 * s + 1, ry: 5 * s + 1 });
     canopy(p, bl, LEAF[3], seed);
@@ -202,19 +218,19 @@ const TREE_DRAW = [
   (p, cx, by, s, r, seed) => {
     shadow(p, cx, by, 12 * s + 1);
     const th = Math.round(13 * s), cy = by - th - 8 * s;
-    trunk(p, cx, by - th, by, s > 0.5 ? 3 : 2, BARK[4], seed, { twist: 0.5, amp: s > 0.8 ? 1 : 0 });
-    if (s > 0.5) { p.line(cx, by - th, cx - Math.round(8 * s), by - th - Math.round(6 * s), BARK[4][1], 2); p.line(cx, by - th, cx + Math.round(8 * s), by - th - Math.round(5 * s), BARK[4][0], 2); }
+    trunk(p, cx, by - th, by, TW(s > 0.5 ? 3 : 2), BARK[4], seed, { twist: 0.5, amp: s > 0.8 ? 1 : 0 });
+    if (s > 0.5) { p.line(cx, by - th, cx - Math.round(8 * s), by - th - Math.round(6 * s), BARK[4][1], TW(2)); p.line(cx, by - th, cx + Math.round(8 * s), by - th - Math.round(5 * s), BARK[4][0], TW(2)); }
     canopy(p, crown(r, cx + 0.5, cy, 16.5 * s + 1, 8.5 * s + 1, Math.round(5 + 5 * s), 5.4 * s + 1), LEAF[4], seed);
     const leafSet = new Set(LEAF[4]);
     for (let i = 0; i < 46 * s; i++) {      // blossom flecks
       const x = (cx + (r() - 0.5) * 38 * s) | 0, y = (cy + (r() - 0.5) * 24 * s) | 0;
-      if (leafSet.has(p.get(x, y))) p.set(x, y, r() < 0.6 ? C('#ffffff') : C('#ffd0e0'));
+      if (BLOSSOM && leafSet.has(p.get(x, y))) p.set(x, y, r() < 0.6 ? C('#ffffff') : C('#ffd0e0'));
     }
   },
   // 5 redwood
   (p, cx, by, s, r, seed) => {
     shadow(p, cx, by, 12 * s + 1);
-    const w = s > 0.8 ? 7 : s > 0.5 ? 5 : 3;
+    const w = TW(s > 0.8 ? 7 : s > 0.5 ? 5 : 3);
     trunk(p, cx, by - Math.round(62 * s), by, w, BARK[5], seed, { furrow: 0.34 });
     if (s > 0.5) { p.rect(cx - (w >> 1) - 2, by, w + 4, 1, BARK[5][0]); p.set(cx - (w >> 1) - 2, by - 1, BARK[5][1]); p.set(cx + (w >> 1) + 2, by - 1, BARK[5][0]); }
     if (s > 0.8) for (const [dy, sd] of [[26, -1], [31, 1]]) {      // low branch stubs
@@ -228,8 +244,8 @@ const TREE_DRAW = [
   (p, cx, by, s, r, seed) => {
     shadow(p, cx, by, 13 * s + 1);
     const th = Math.round(24 * s), cy = by - th - 6 * s;
-    trunk(p, cx, by - th, by, s > 0.8 ? 5 : s > 0.5 ? 3 : 2, BARK[6], seed, { twist: 0.42, amp: s > 0.5 ? 1.6 : 0 });
-    if (s > 0.5) { p.line(cx, by - th + 2, cx - Math.round(10 * s), by - th - Math.round(5 * s), BARK[6][1], 2); p.line(cx + 1, by - th + 2, cx + Math.round(10 * s), by - th - Math.round(6 * s), BARK[6][0], 2); }
+    trunk(p, cx, by - th, by, TW(s > 0.8 ? 5 : s > 0.5 ? 3 : 2), BARK[6], seed, { twist: 0.42, amp: s > 0.5 ? 1.6 : 0 });
+    if (s > 0.5) { p.line(cx, by - th + 2, cx - Math.round(10 * s), by - th - Math.round(5 * s), BARK[6][1], TW(2)); p.line(cx + 1, by - th + 2, cx + Math.round(10 * s), by - th - Math.round(6 * s), BARK[6][0], TW(2)); }
     const bl = crown(r, cx + 0.5, cy, 18 * s + 1, 9 * s + 1, Math.round(5 + 5 * s), 6 * s + 1)
       .concat(crown(r, cx + 0.5, cy - 10 * s, 12.5 * s + 1, 8.5 * s + 1, Math.round(4 + 3 * s), 5.5 * s + 1));
     canopy(p, bl, LEAF[6], seed);
@@ -241,11 +257,99 @@ const TREE_DRAW = [
   },
 ];
 const STAGE_SCALE = [0.42, 0.68, 1];
-function buildTree(t, v, stage) {
+// season: 0 spring, 1 summer, 2 autumn, 3 winter. The shape is the same all year; only the leaves change.
+function seasonTree(p, t, season, seed, draw) {
+  const usual = LEAF[t], pal = SEASON_LEAF[season][t] || usual;
+  LEAF[t] = pal; BLOSSOM = season < 2;
+  draw();
+  if (season === 0 && (t === 1 || t === 2)) {            // spring blossom on birch and oak
+    const set = new Set(pal), r = mulberry(seed + 99);
+    for (let i = 0; i < p.w * p.h / 90; i++) { const x = (r() * p.w) | 0, y = (r() * p.h) | 0; if (set.has(p.get(x, y)) && set.has(p.get(x, y - 1))) p.set(x, y, r() < 0.5 ? C('#ffffff') : C('#fff0a8')); }
+  }
+  if (season === 3) snowCap(p, pal);
+  LEAF[t] = usual; BLOSSOM = true;
+}
+function buildTree(t, v, stage, season = 1) {
   const p = new Pix(76, 108), cx = 38, by = 104, seed = 1000 + t * 97 + v * 13 + stage * 7;
-  TREE_DRAW[t](p, cx, by, STAGE_SCALE[stage], mulberry(seed), seed);
+  seasonTree(p, t, season, seed, () => TREE_DRAW[t](p, cx, by, STAGE_SCALE[stage], mulberry(seed), seed));
   p.outline(C(TREE_OUT[t]));
   return p.sprite(cx, by);
+}
+// The Ancient tree of a ring: the same kind of tree at about twice the size, on great buttress roots.
+const ANCIENT_SCALE = [2.5, 2.4, 2.2, 2.2, 2.2, 1.8, 2.1];
+function buildAncient(t, season = 1) {
+  const p = new Pix(190, 240), cx = 95, by = 232, seed = 7000 + t * 131, bk = BARK[t];
+  TRUNK_MULT = 2.5;
+  seasonTree(p, t, season, seed, () => {
+    TREE_DRAW[t](p, cx, by, ANCIENT_SCALE[t], mulberry(seed), seed);
+    const hw = Math.round([3, 3, 5, 4, 3, 7, 5][t] * 2.5 / 2);
+    for (const sd of [-1, 1]) {                           // roots, and moss on the shady side
+      p.line(cx + sd * hw, by - 6, cx + sd * (hw + 6), by, sd < 0 ? bk[2] : bk[0], 3);
+      p.line(cx + sd * (hw - 1), by - 3, cx + sd * (hw + 9), by + 1, bk[1], 2);
+    }
+    for (let i = 0; i < 9; i++) { const x = cx + hw - 1 - ((hash2(i, t, 3) * 4) | 0), y = by - 4 - ((hash2(i, t, 4) * 16) | 0); if (p.solid(x, y)) p.set(x, y, season === 3 ? SNOW[1] : C('#6a9a48')); }
+  });
+  TRUNK_MULT = 1;
+  p.outline(C(TREE_OUT[t]));
+  return p.sprite(cx, by);
+}
+function buildAncientStump(t) {
+  const p = new Pix(48, 28), cx = 24, by = 23, w = Math.round(STUMP_W[t] * 2.3), x0 = cx - (w >> 1), bk = BARK[t], wd = TREES[t].wood;
+  shadow(p, cx, by, w * 0.8);
+  for (let y = by - 7; y <= by; y++) for (let x = x0 - (y >= by - 1 ? 2 : y >= by - 3 ? 1 : 0); x < x0 + w + (y >= by - 1 ? 2 : y >= by - 3 ? 1 : 0); x++) {
+    const u = (x - x0) / (w - 1); let c = u < 0.3 ? bk[2] : u > 0.7 ? bk[0] : bk[1];
+    if (hash2(x, (y / 3) | 0, t + 40) < 0.2 && c !== bk[0]) c = c === bk[2] ? bk[1] : bk[0];
+    p.set(x, y, c);
+  }
+  p.ell(cx, by - 9.5, w / 2, 3.2, C(wd));
+  p.ell(cx - 1, by - 10, w / 2 - 2, 2.2, C(shade(wd, 0.16)));
+  p.ell(cx, by - 9.5, w / 2 - 4, 1.6, C(wd));
+  p.ell(cx, by - 9.5, Math.max(1, w / 2 - 7), 0.9, C(shade(wd, -0.25)));
+  for (let x = x0 + 1; x < x0 + w - 1; x++) if (p.solid(x, by - 7) && hash2(x, 2, t) < 0.5) p.set(x, by - 7, C(shade(wd, -0.3)));
+  p.outline(C(TREE_OUT[t]));
+  return p.sprite(cx, by);
+}
+// A plank bridge of w × h tiles; v: it runs north to south. deck lies on the water, rail is the near handrail (drawn over walkers).
+const BRIDGE_PAL = PAL('#4a2e16', '#6e4622', '#a06c38', '#c08a4e', '#dca868');
+function makeBridgeArt(w, h, v) {
+  const W = w * TS, H = h * TS, [D0, D1, D2, D3, D4] = BRIDGE_PAL, ink = C('#1c120c'), sh = C('#0a1a10', 80);
+  const deck = new Pix(W + 4, H + 5), rail = new Pix(W + 4, H + 5), ox = 2, oy = 1;
+  if (!v) {
+    deck.rect(ox + 1, oy + H, W, 2, sh);                                         // shadow on the water
+    for (let x = 0; x < W; x++) for (let y = 3; y < H; y++) {
+      const b = (x / 4) | 0, edge = x % 4 === 3, end = x < 2 || x >= W - 2;
+      deck.set(ox + x, oy + y, end ? D1 : edge ? D1 : (hash2(b, 1, 7) < 0.4 ? D3 : D2));
+      if (!edge && !end && hash2(x, y, 11) < 0.05) deck.set(ox + x, oy + y, D1);
+    }
+    deck.rect(ox, oy + H - 2, W, 2, D1); deck.rect(ox, oy + H - 3, W, 1, D4);    // near edge beam
+    const mkRail = (p, y0) => {
+      p.rect(ox, oy + y0 + 2, W, 2, D3); p.rect(ox, oy + y0 + 4, W, 1, D1); p.rect(ox, oy + y0 + 2, W, 1, D4);
+      for (let x = 1; x < W; x += TS) { const px = Math.min(x, W - 3); p.rect(ox + px, oy + y0, 2, 8, D2); p.rect(ox + px, oy + y0, 2, 1, D4); p.rect(ox + px + 1, oy + y0 + 1, 1, 7, D1); }
+      p.rect(ox + W - 3, oy + y0, 2, 8, D2); p.rect(ox + W - 3, oy + y0, 2, 1, D4);
+    };
+    mkRail(deck, 0); mkRail(rail, H - 10);
+  } else {
+    deck.rect(ox + W, oy + 2, 2, H, sh);
+    for (let y = 0; y < H; y++) for (let x = 2; x < W - 2; x++) {
+      const b = (y / 4) | 0, edge = y % 4 === 3, end = y < 2 || y >= H - 2;
+      deck.set(ox + x, oy + y, end ? D1 : edge ? D1 : (hash2(b, 2, 7) < 0.4 ? D3 : D2));
+      if (!edge && !end && hash2(x, y, 11) < 0.05) deck.set(ox + x, oy + y, D1);
+    }
+    for (const x of [0, W - 3]) {
+      deck.rect(ox + x, oy, 3, H, D2); deck.rect(ox + x, oy, 1, H, D4); deck.rect(ox + x + 2, oy, 1, H, D1);
+      for (let y = 0; y < H; y += TS) { const py = Math.min(y, H - 4); deck.rect(ox + x - 1, oy + py, 5, 4, D3); deck.rect(ox + x - 1, oy + py, 5, 1, D4); deck.rect(ox + x - 1, oy + py + 3, 5, 1, D1); }
+      deck.rect(ox + x - 1, oy + H - 4, 5, 4, D3); deck.rect(ox + x - 1, oy + H - 4, 5, 1, D4); deck.rect(ox + x - 1, oy + H - 1, 5, 1, D1);
+    }
+  }
+  deck.outline(ink);
+  if (!v) rail.outline(ink);
+  return { deck: { c: deck.toCanvas(), ax: ox, ay: oy }, rail: v ? null : { c: rail.toCanvas(), ax: ox, ay: oy } };
+}
+function bridgeArt(b) {
+  const key = b.w + 'x' + b.h + 'x' + (b.v ? 1 : 0);
+  let a = ART.bridge.get(key);
+  if (!a) { a = makeBridgeArt(b.w, b.h, b.v); ART.bridge.set(key, a); }
+  return a;
 }
 const STUMP_W = [5, 5, 7, 7, 7, 11, 9];
 function buildStump(t) {
@@ -365,6 +469,12 @@ const HAT_ART = {
   crown:    { dy: -3, rows: ['..k..kk..k..', '..kk.kk.kk..', '..kckkgkkc..', '..yyyyyyyy..'], pal: { k: '#3a3040', c: '#58e0d0', g: '#e8508a', y: '#f6c83c' } },
 };
 // how each kind of Meeple dresses: body colours to pick from, trim, and usual hat
+Object.assign(HAT_ART, {
+  bunny:    { dy: -5, rows: ['...ww..ww...', '...wp..pw...', '...wp..pw...', '...wp..pw...', '...ww..ww...', '...wwwwww...'], pal: { w: '#f4f0e4', p: '#f6a4c0' } },
+  sunhat:   { dy: -3, rows: ['....yYyy....', '...yYyyyy...', '...bbbbbb...', 'yyyYyyyyyyyy', 'd..........d'], pal: { y: '#fff0a0', Y: '#ffffff', b: '#4f9fd8', d: '#d8c060' } },
+  pumpkin:  { dy: -4, rows: ['.....gg.....', '....oooo....', '...oOooood..', '..oOoooooood', '..ooKooKoood', '...oooooood.'], pal: { o: '#f08c28', O: '#fcc450', d: '#b85a14', g: '#3f8a4a', K: '#3a1c0c' } },
+  earmuffs: { dy: -1, rows: ['...bbbbbb...', '..rb....br..', '.rRr....rRr.', '.rrr....rrr.'], pal: { b: '#3a3040', r: '#d8402e', R: '#f6a0a0' } },
+});
 const LOOKS = {
   player:    { cols: ['#d8402e'], hat: 'hard' },
   jack:      { cols: ['#c8382a', '#3f8a4a', '#d87a2a', '#2f8a8a', '#8a4fa8', '#9a6a3a'], plaid: true, hat: 'beanie' },
@@ -773,6 +883,20 @@ const ICONS = {
   bed: [['............', 'h...........', 'h.ww........', 'hwwwrrrrrrr.', 'hhhhhhhhhhhh', 'hBBBBBBBBBBh', 'h..........h', 'h..........h'],
     { h: '#7a4a26', w: '#f4f0e4', r: '#c8382a', B: '#a06a38' }],
 };
+Object.assign(ICONS, {
+  spring: [['............', '....pp.pp...', '...pPPpPPp..', '...pPPyPPp..', '....ppyypp..', '...pPPyPPp..', '...pPPpPPp..', '....pp.pp...', '.....g......', '...g.g......', '....gg......', '.....g......'],
+    { p: '#e8508a', P: '#f6a4c0', y: '#f6c83c', g: '#3f8a4a' }],
+  summer: [['.....y......', '.y...y...y..', '..y.....y...', '....yyyy....', '...yYYYYy...', 'yy.yYYYYy.yy', '...yYYYYy...', '....yyyy....', '..y.....y...', '.y...y...y..', '.....y......'],
+    { y: '#f6a83c', Y: '#ffe060' }],
+  autumn: [['......o.....', '.....oOo....', '..o..oOo..o.', '..oOoOOoOOo.', '...oOOOOOo..', '.ooOOOOOOoo.', '..oOOOOOOo..', '...ooOOoo...', '.....rr.....', '.....r......', '....r.......'],
+    { o: '#d8401c', O: '#f08c28', r: '#7a4a26' }],
+  winter: [['.....w......', '...w.w.w....', '....www.....', '.w...w...w..', '..w..w..w...', 'wwwwwwwwwww.', '..w..w..w...', '.w...w...w..', '....www.....', '...w.w.w....', '.....w......'],
+    { w: '#d8f0ff' }],
+  bridge: [['............', '.p........p.', '.p........p.', 'pppppppppppp', '.p..p..p..p.', 'LLLLLLLLLLLL', 'bbbbbbbbbbbb', '.b........b.', '.b........b.', 'wwwwwwwwwwww', '.wwwwwwwwww.'],
+    { p: '#a06c38', L: '#dca868', b: '#6e4622', w: '#5aaccc' }],
+  star: [['.....yy.....', '.....yy.....', '....yYYy....', 'yyyyyYYyyyyy', '.yYYYYYYYYy.', '..yYYYYYYy..', '...yYYYYy...', '..yYYyyYYy..', '..yYy..yYy..', '.yyy....yyy.'],
+    { y: '#e8a81c', Y: '#ffe060' }],
+});
 function buildIcon(name) {
   const [rows, map] = ICONS[name], m = {};
   for (const k in map) m[k] = C(map[k]);
@@ -807,9 +931,21 @@ const TREE_VARIANTS = 3;
 function yieldNow() { return new Promise(r => setTimeout(r, 0)); }
 async function buildArtAsync(progress) {
   const jobs = [];
+  // trees for every season; where a kind looks the same as in summer the summer sprites are shared
+  for (let sn = 0; sn < 4; sn++) ART.trees[sn] = [];
+  ART.tree = ART.trees[1];
   for (let t = 0; t < NT; t++) {
-    ART.tree[t] = [];
-    for (let v = 0; v < TREE_VARIANTS; v++) { ART.tree[t][v] = []; for (let st = 0; st < 3; st++) jobs.push(() => { ART.tree[t][v][st] = buildTree(t, v, st); }); }
+    for (const sn of [1, 0, 2, 3]) {
+      const own = sn === 1 || sn === 3 || SEASON_LEAF[sn][t];
+      if (!own) { ART.trees[sn][t] = ART.trees[1][t]; continue; }
+      ART.trees[sn][t] = [];
+      for (let v = 0; v < TREE_VARIANTS; v++) { ART.trees[sn][t][v] = []; for (let st = 0; st < 3; st++) jobs.push(() => { ART.trees[sn][t][v][st] = buildTree(t, v, st, sn); }); }
+    }
+    jobs.push(() => {
+      ART.ancStump[t] = buildAncientStump(t);
+      ART.anc[t] = [];
+      for (const sn of [1, 0, 2, 3]) ART.anc[t][sn] = sn === 1 || sn === 3 || SEASON_LEAF[sn][t] ? buildAncient(t, sn) : ART.anc[t][1];
+    });
     jobs.push(() => {
       ART.stump[t] = buildStump(t);
       ART.pile[t] = [null]; for (let n = 1; n <= 6; n++) ART.pile[t][n] = buildPile(t, n);
@@ -831,7 +967,7 @@ async function buildArtAsync(progress) {
   // data URLs for the DOM
   const U = ART.url;
   for (const k in ICONS) U[k] = buildIcon(k).toDataURL();
-  for (let t = 0; t < NT; t++) { U['it' + t] = U['log' + t] = ART.log[t].c.toDataURL(); U['tree' + t] = ART.tree[t][0][2].c.toDataURL(); }
+  for (let t = 0; t < NT; t++) { U['it' + t] = U['log' + t] = ART.log[t].c.toDataURL(); U['tree' + t] = ART.tree[t][0][2].c.toDataURL(); U['anc' + t] = ART.anc[t][1].c.toDataURL(); U['ancStump' + t] = ART.ancStump[t].c.toDataURL(); }
   for (let it = NT; it < NI; it++) U['it' + it] = buildItemIcon(it).toDataURL();
   for (const k of ['cabin', 'yard', 'forester', 'sawmill', 'kiln', 'depot', 'workshop']) U[k] = ART.spr[k].c.toDataURL();
   U.lodge = ART.spr['lodge' + LODGE.length].c.toDataURL();

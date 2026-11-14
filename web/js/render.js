@@ -12,6 +12,7 @@ const R = window.R = {
   chunks: new Map(), far: { 2: { g: new Map(), t: new Map() }, 4: { g: new Map(), t: new Map() } },
   frame: 0, t: 0, parts: [], floats: [], falls: [], marks: [],
   ghost: null, radiusOf: null, ready: false, fade: true, smokeT: 0, stockKey: '', stock: [],
+  season: 0,       // the season the ground and trees are drawn in; follows SEA
 };
 
 R.init = function (cv) {
@@ -58,6 +59,13 @@ R.zoomBy = function (steps, sx, sy) {
 R.reset = function () {
   R.parts = []; R.floats = []; R.falls = []; R.marks = []; R.chunks.clear(); R.ghost = null; R.radiusOf = null; R.stockKey = '';
   for (const q of [2, 4]) { R.far[q].g.clear(); R.far[q].t.clear(); }
+  R.season = S ? SEA : 0;
+};
+// the season has turned: everything cached is redrawn a little at a time, the old picture standing in until then
+R.turnSeason = function (sn) {
+  R.season = sn;
+  for (const ch of R.chunks.values()) ch.stale = true;
+  for (const q of [2, 4]) { for (const g of R.far[q].g.values()) g.stale = true; for (const e of R.far[q].t.values()) e.stale = true; }
 };
 
 // ---------------------------------------------------------------- ground
@@ -73,12 +81,27 @@ const GPAL = [
 const DIRT = PAL('#7a5c3a', '#8e6e48', '#a28256', '#b6966a');
 const WATER = PAL('#a6dce0', '#5aaccc', '#4290bc', '#3478aa');
 const SAND = PAL('#b89c64', '#cdb47c');
+// the same colours through the year: [spring, summer, autumn, winter]
+function tintC(c, hex, f) {
+  const [r, g, b] = hexRgb(hex), cr = c & 255, cg = (c >> 8) & 255, cb = (c >> 16) & 255;
+  return (0xff000000 | (Math.round(cb + (b - cb) * f) << 16) | (Math.round(cg + (g - cg) * f) << 8) | Math.round(cr + (r - cr) * f)) >>> 0;
+}
+const SEASON_TINT = [['#a8e060', 0.1], null, ['#c09438', 0.3], ['#eef4fa', 0.8]];
+const seasonPal = (pal, sn, k = 1) => SEASON_TINT[sn] ? pal.map(c => tintC(c, SEASON_TINT[sn][0], SEASON_TINT[sn][1] * k)) : pal;
+const GPAL_S = [0, 1, 2, 3].map(sn => GPAL.map(pal => seasonPal(pal, sn)));
+const DIRT_S = [0, 1, 2, 3].map(sn => seasonPal(DIRT, sn, sn === 3 ? 0.7 : 0.4));
+const SAND_S = [0, 1, 2, 3].map(sn => seasonPal(SAND, sn, sn === 3 ? 0.8 : 0.3));
+const WATER_S = [0, 1, 2, 3].map(sn => sn === 3 ? WATER.map(c => tintC(c, '#9ab8cc', 0.35)) : WATER);
+// what a tree's leaves look like as they fly: null is the tree's own colour
+const SEASON_COL = [[null, '#9ccc48', '#55a03c', '#e88424', null, null, null], [], [null, '#e8b828', '#b8642a', '#c42a18', '#b85a48', null, null], ['#eef4fa', '#eef4fa', '#eef4fa', '#eef4fa', '#eef4fa', '#eef4fa', '#eef4fa']];
+const LITTER = [['#d8401c', '#f08c28'], ['#f08c28', '#fcc450'], ['#b8642a', '#e8b828']];
 const FLOWERS = [['#ffffff', '#ffe060'], ['#ffe060', '#fff4b0'], ['#7aa8f0', '#c8dcff'], ['#f08c28', '#d8401c'], ['#f6b4c8', '#ffffff'], ['#8a5a34', '#6a4426'], ['#58e0d0', '#b8fff0']];
 
 // q: art pixels per canvas pixel (1 up close; 2 or 4 for the far-zoom layers, which skip small details)
 function genChunk(cx, cy, q = 1) {
   const n = CH / q, c = newCanvas(n, n), g = c.getContext('2d'), id = g.createImageData(n, n), d = new Uint32Array(id.data.buffer);
   const seed = S.seed, X0 = cx * CH, Y0 = cy * CH, G = 4, GN = CH / G + 1;
+  const sn = R.season, GP = GPAL_S[sn], DT = DIRT_S[sn], WT = WATER_S[sn], SD = SAND_S[sn];
   // slow-changing fields sampled on a coarse grid, then interpolated
   const wg = new Float32Array(GN * GN), zg = new Float32Array(GN * GN);
   for (let j = 0; j < GN; j++) for (let i = 0; i < GN; i++) { wg[j * GN + i] = waterV(X0 + i * G, Y0 + j * G, seed); zg[j * GN + i] = zoneD(X0 + i * G, Y0 + j * G, seed); }
@@ -88,31 +111,30 @@ function genChunk(cx, cy, q = 1) {
   };
   const zoneAt = q === 1 ? new Uint8Array(n * n) : null, grass = q === 1 ? new Uint8Array(n * n) : null;
   for (let yy = 0; yy < n; yy++) for (let xx = 0; xx < n; xx++) {
-    const x = xx * q, y = yy * q, px = X0 + x, py = Y0 + y, bx = (px / q) | 0, by = (py / q) | 0, wv = lerp2(wg, x, y), o = yy * n + xx;
+    const x = xx * q, y = yy * q, px = X0 + x, py = Y0 + y, bx = (px / q) | 0, by = (py / q) | 0, dd = lerp2(zg, x, y), wv = wetV(lerp2(wg, x, y), dd), o = yy * n + xx;
     let col;
     if (wv > 0) {
-      if (wv < 0.006) col = WATER[bayer(bx, by) < 0.7 ? 0 : 1];
-      else if (wv < 0.03) col = WATER[1];
-      else if (wv < 0.075) col = WATER[bayer(bx, by) < (wv - 0.03) / 0.045 ? 2 : 1];
-      else col = WATER[bayer(bx, by) < (wv - 0.075) / 0.06 ? 3 : 2];
-      if (q === 1 && wv > 0.012 && hash2(px >> 2, py, seed + 50) < 0.03) col = WATER[wv < 0.05 ? 0 : 1];
-    } else if (wv > -0.014) col = SAND[bayer(bx, by) < (wv + 0.014) / 0.014 ? 1 : 0];
+      if (wv < 0.006) col = WT[bayer(bx, by) < 0.7 ? 0 : 1];
+      else if (wv < 0.03) col = WT[1];
+      else if (wv < 0.075) col = WT[bayer(bx, by) < (wv - 0.03) / 0.045 ? 2 : 1];
+      else col = WT[bayer(bx, by) < (wv - 0.075) / 0.06 ? 3 : 2];
+      if (q === 1 && wv > 0.012 && hash2(px >> 2, py, seed + 50) < 0.03) col = WT[wv < 0.05 ? 0 : 1];
+    } else if (wv > -0.014) col = SD[bayer(bx, by) < (wv + 0.014) / 0.014 ? 1 : 0];
     else {
-      const dd = lerp2(zg, x, y);
       let r = ringOf(dd);
       if (r < NT - 1) { const toNext = RINGS[r + 1] - dd; if (toNext < 1.6 && bayer(bx, by) * 1.6 > toNext) r++; }
       const dYard = Math.hypot(px - YARD_X, py - (YARD_Y + 14)) / TS;
       let dirt = false;
       if (dYard < 8) dirt = 1 - dYard / 5.2 + (fbm(px / 34, py / 34, seed + 13, 2) - 0.5) * 0.55 > bayer(bx, by) * 0.16;
-      if (dirt) col = ptone(DIRT, fbm(px / 20, py / 20, seed + 14, 2) * 1.5 - 0.25 + (hash2(px, py, seed + 15) - 0.5) * 0.3, bx, by);
+      if (dirt) col = ptone(DT, fbm(px / 20, py / 20, seed + 14, 2) * 1.5 - 0.25 + (hash2(px, py, seed + 15) - 0.5) * 0.3, bx, by);
       else {
-        col = ptone(GPAL[r], fbm(px / 26, py / 26, seed + 31, 2) * 1.6 - 0.3, bx, by);
+        col = ptone(GP[r], fbm(px / 26, py / 26, seed + 31, 2) * 1.6 - 0.3, bx, by);
         if (q === 1) {
           const sp = hash2(px, py, seed + 33);
-          if (sp < 0.02) col = GPAL[r][3]; else if (sp > 0.975) col = GPAL[r][0];
+          if (sp < 0.02) col = GP[r][3]; else if (sp > 0.975) col = GP[r][0];
           grass[o] = 1; zoneAt[o] = r;
         }
-        if (wv > -0.02) col = GPAL[r][0];       // damp edge beside the shore
+        if (wv > -0.02) col = GP[r][0];       // damp edge beside the shore
       }
     }
     d[o] = col;
@@ -125,7 +147,13 @@ function genChunk(cx, cy, q = 1) {
       for (let k = 0; k < 2; k++) {
         const h = hash2(gx, gy, seed + 60 + k), x = tx * TS + 2 + ((hash2(gx, gy, seed + 62 + k) * 12) | 0), y = ty * TS + 3 + ((hash2(gx, gy, seed + 64 + k) * 11) | 0);
         if (!grass[y * CH + x]) continue;
-        const r = zoneAt[y * CH + x], P4 = GPAL[r], F = FLOWERS[r];
+        const r = zoneAt[y * CH + x], P4 = GP[r], F = sn === 2 ? LITTER[(gx + gy + k) % 3] : FLOWERS[r];
+        if (sn === 3) {          // winter: a few tufts and twigs poking through the snow
+          if (h < 0.16) { put(x, y, C('#8aa48a')); put(x + 1, y - 1, C('#8aa48a')); put(x + 2, y, C('#a8bcae')); }
+          else if (h < 0.22) { put(x, y, C('#8a8c90')); put(x + 1, y, C('#6a6c74')); put(x, y - 1, C('#ffffff')); }
+          else if (h < 0.3) { put(x, y, C('#ffffff')); put(x + 1, y, C('#ffffff')); put(x + 2, y + 1, C('#d4e2ee')); }
+          continue;
+        }
         if (h < 0.34) { put(x, y, P4[0]); put(x + 1, y - 1, P4[0]); put(x + 2, y, P4[0]); put(x + 1, y - 2, P4[3]); put(x + 3, y - 1, P4[3]); }
         else if (h < 0.40) { put(x, y, C('#8a8c90')); put(x + 1, y, C('#6a6c74')); put(x, y - 1, C('#b4b6b8')); }
         else if (r === 3 && h < 0.72) { put(x, y, C(F[0])); put(x + 1, y, C(F[1])); put(x + 3, y + 2, C(F[0])); put(x - 2, y + 1, C('#fcc450')); }
@@ -135,7 +163,7 @@ function genChunk(cx, cy, q = 1) {
           else for (let j = 0; j < 4; j++) { put(x + j, y - (j & 1), C('#5ca050')); put(x + j, y + 1 - (j & 1), C('#2c6a3a')); }
         }
         else if (r === 6 && h < 0.5) { put(x, y, C(F[0])); put(x + 1, y, C(F[1])); put(x, y + 1, C('#d8d0c0')); }
-        else if (r < 3 && h < 0.47) { put(x, y, C(F[0])); put(x + 1, y, C(F[0])); put(x, y - 1, C(F[1])); put(x, y + 1, P4[0]); }
+        else if (r < 3 && h < (sn === 0 ? 0.68 : sn === 2 ? 0.6 : 0.47)) { put(x, y, C(F[0])); put(x + 1, y, C(F[0])); put(x, y - 1, C(F[1])); put(x, y + 1, P4[0]); }
       }
     }
   }
@@ -147,7 +175,8 @@ function tileSprite(i) {
   const k = W.kind[i];
   if (!k) return W.ter[i] === TER.ROCK ? ART.rock[W.vr[i]] : null;
   const g = W.g[i];
-  return g >= 1 ? ART.tree[k - 1][W.vr[i]][2] : g < 0.12 ? ART.stump[k - 1] : ART.tree[k - 1][W.vr[i]][g < 0.45 ? 0 : 1];
+  const T = ART.trees[R.season][k - 1][W.vr[i]];
+  return g >= 1 ? T[2] : g < 0.12 ? ART.stump[k - 1] : T[g < 0.45 ? 0 : 1];
 }
 // every tree in and around one chunk, drawn small onto a see-through layer
 function treeChunk(cx, cy, q, into) {
@@ -181,7 +210,7 @@ function hearing(x, y, me) {
   const d = Math.hypot(x - R.cam.x, y - R.cam.y), reach = Math.min(900, Math.max(R.W, R.H) / R.z * 0.7);
   return Math.max(me ? 0.85 : 0, clamp(1.15 - d / reach, 0, 1));
 }
-const leafCols = t => [shade(TREES[t].col, -0.25), TREES[t].col, shade(TREES[t].col, 0.3)];
+const leafCols = t => { const c = SEASON_COL[R.season][t] || TREES[t].col; return [shade(c, -0.25), c, shade(c, 0.3)]; };
 function burst(x, y, cols, n, spread = 30) {
   for (let i = 0; i < n; i++) addPart({ x: x + (Math.random() - 0.5) * spread, y: y - Math.random() * 12, vx: (Math.random() - 0.5) * 50, vy: -30 - Math.random() * 40, g: 70, max: 1 + Math.random() * 0.6, col: cols[i % cols.length], sz: i % 3 === 0 ? 2 : 1 });
 }
@@ -193,13 +222,18 @@ R.onEvent = function (e) {
       if (!seen) break;
       const wood = TREES[e.k - 1].wood, lc = leafCols(e.k - 1), h = ART.tree[e.k - 1][0][2].h;
       for (let i = 0; i < 4; i++) addPart({ x: e.x + e.side * 2, y: e.y - 5, vx: e.side * (12 + Math.random() * 28), vy: -20 - Math.random() * 30, g: 160, max: 0.5, col: i & 1 ? wood : shade(wood, -0.25) });
-      for (let i = 0; i < 2; i++) addPart({ x: e.x + (Math.random() - 0.5) * 14, y: e.y - h * (0.5 + Math.random() * 0.3), vx: (Math.random() - 0.5) * 14, vy: 8, g: 26, max: 1.2, col: lc[(Math.random() * 3) | 0], sway: 1 });
+      const wide = e.anc ? 44 : 14, tall = e.anc ? h * 1.8 : h;
+      for (let i = 0; i < (e.anc ? 3 : 2); i++) addPart({ x: e.x + (Math.random() - 0.5) * wide, y: e.y - tall * (0.5 + Math.random() * 0.3), vx: (Math.random() - 0.5) * 14, vy: 8, g: 26, max: e.anc ? 2.2 : 1.2, col: lc[(Math.random() * 3) | 0], sway: 1 });
       break;
     }
     case 'fall':
       AUDIO.sfx('fall', vol, e.k - 1);
-      if (R.q === 1 && seen) R.falls.push({ x: e.x, y: e.y, k: e.k, v: e.v, dir: e.dir, t: 0 });
+      if (e.anc != null) { R.falls.push({ x: e.x, y: e.y, k: e.k, anc: e.anc, dir: e.dir, t: 0, dur: 1.5 }); AUDIO.sfx('fall', 1, e.k - 1); break; }
+      if (R.q === 1 && seen) R.falls.push({ x: e.x, y: e.y, k: e.k, v: e.v, dir: e.dir, t: 0, dur: 0.75 });
       break;
+    case 'bridge': AUDIO.sfx('build'); burst(e.x, e.y, ['#dca868', '#a06c38', '#ffffff'], 40, 70); break;
+    case 'ancient': burst(e.x, e.y - 40, ['#ffe060', '#ffffff', '#8ad070', '#f6c83c'], 80, 90); break;
+    case 'skill': if (seen) { burst(e.x, e.y - 14, ['#ffe060', '#ffffff'], 8, 8); if (R.q === 1) R.floats.push({ x: e.x, y: e.y - 26, txt: '+', col: '#ffe060', t: 0 }); } break;
     case 'pick': AUDIO.sfx('pick', vol); break;
     case 'deposit':
       AUDIO.sfx(e.coins ? 'coin' : 'drop', vol);
@@ -246,7 +280,7 @@ function drawMeeple(ctx, e, role, col, hat, gait, axeLv, swingT) {
   const fr = meepleFor(role, col, hat), o = POSE;
   o.rot = 0; o.bob = 0; o.xo = 0; o.legs = true; o.flip = false;
   let f = fr.stand, face = e.face < 0 ? -1 : 1, x = Math.round(e.x);
-  const y = Math.round(e.y), chopping = e.st === 'chop';
+  const y = Math.round(e.y), chopping = e.st === 'chop' || e.st === 'chopAnc';
   if (e.moving) {
     gaitPose(gait, e.walkT, o);
     if (o.legs) { const ph = Math.floor(e.walkT * 9) & 3; f = ph === 1 ? fr.walkA : ph === 3 ? fr.walkB : fr.stand; }
@@ -310,12 +344,24 @@ function drawBuilding(ctx, b) {
   }
 }
 function drawFall(ctx, f) {
-  const s = ART.tree[f.k - 1][f.v][2], u = clamp(f.t / 0.75, 0, 1);
+  const s = f.anc != null ? ART.anc[f.anc][R.season] : ART.trees[R.season][f.k - 1][f.v][2], u = clamp(f.t / f.dur, 0, 1);
   ctx.save();
   ctx.globalAlpha = u > 0.8 ? 1 - (u - 0.8) / 0.2 : 1;
   ctx.translate(Math.round(f.x), Math.round(f.y)); ctx.rotate(f.dir * Math.pow(u, 2.2) * 1.5);
   ctx.drawImage(s.c, -s.ax, -s.ay);
   ctx.restore();
+}
+function drawAncient(ctx, r) {
+  const A = W.anc[r], P = S.player;
+  if (S.anc[r].done) {
+    if (R.falls.some(f => f.anc === r)) return;         // still toppling
+    drawSpr(ctx, ART.ancStump[r], A.x, A.y); return;
+  }
+  const s = ART.anc[r][R.season], sh = W.ancShake[r] > 0 ? Math.round(Math.sin(W.ancShake[r] * 60) * W.ancShake[r] * 7) : 0;
+  const hide = R.fade && UI.inGame && R.q === 1 && A.y > P.y + 1 && P.y > A.y - s.h + 8 && Math.abs(P.x - A.x) < s.w / 2 - 1;
+  if (hide) ctx.globalAlpha = 0.4;
+  ctx.drawImage(s.c, A.x + sh - s.ax, A.y - s.ay);
+  ctx.globalAlpha = 1;
 }
 function ring(ctx, x, y, r, col, phase, sz = 1) {
   ctx.fillStyle = col;
@@ -330,6 +376,14 @@ function drawEnt(ctx, e) {
   else if (e.me) drawMeeple(ctx, e.me, 'player', 0, S.hat, S.gait, S.axe, PLAYER_SWING);
   else if (e.boss) drawMeeple(ctx, e.boss, 'foreman', 0, null, 0, 0, 1);
   else if (e.f) drawFall(ctx, e.f);
+  else if (e.rail) { const a = bridgeArt(e.rail).rail; ctx.drawImage(a.c, e.rail.x * TS - a.ax, e.rail.y * TS - a.ay); }
+  else if (e.anc != null) drawAncient(ctx, e.anc);
+  else if (e.ghost && e.ghost.bridge) {
+    const b = e.ghost.bridge, a = bridgeArt(b).deck;
+    ctx.fillStyle = b.ok ? 'rgba(120,255,120,0.35)' : 'rgba(255,80,60,0.45)';
+    ctx.fillRect(b.x * TS - 2, b.y * TS - 2, b.w * TS + 4, b.h * TS + 4);
+    ctx.globalAlpha = 0.85; ctx.drawImage(a.c, b.x * TS - a.ax, b.y * TS - a.ay); ctx.globalAlpha = 1;
+  }
   else if (e.ghost) {
     const gh = e.ghost, B = BUILD[gh.type], s = gh.type === 'lodge' ? ART.spr['lodge' + Math.min(S.lodgeStage, LODGE.length)] : ART.spr[gh.type];
     ctx.fillStyle = gh.ok ? 'rgba(120,255,120,0.35)' : 'rgba(255,80,60,0.45)';
@@ -341,6 +395,7 @@ function drawEnt(ctx, e) {
 R.draw = function (dt) {
   R.t += dt; R.frame++;
   const P = S.player;
+  if (SEA !== R.season) R.turnSeason(SEA);
   // ease zoom to its target, holding the anchor point still
   if (!R.pinching && R.k !== R.kT) {
     const d = R.kT - R.k;
@@ -373,9 +428,9 @@ R.draw = function (dt) {
     let budget = R.chunks.size < 4 ? 30 : 2;
     for (let cy = c0y; cy <= c1y; cy++) for (let cx = c0x; cx <= c1x; cx++) {
       const key = cy * 64 + cx; let ch = R.chunks.get(key);
-      if (!ch) {
-        if (budget-- <= 0) { ctx.fillStyle = '#3f7a3a'; ctx.fillRect(cx * CH, cy * CH, CH, CH); continue; }
-        ch = { c: genChunk(cx, cy), used: 0 }; R.chunks.set(key, ch);
+      if (!ch || ch.stale) {
+        if (budget-- > 0) { ch = { c: genChunk(cx, cy), used: 0 }; R.chunks.set(key, ch); }
+        else if (!ch) { ctx.fillStyle = '#3f7a3a'; ctx.fillRect(cx * CH, cy * CH, CH, CH); continue; }
       }
       ch.used = R.frame; ctx.drawImage(ch.c, cx * CH, cy * CH);
     }
@@ -384,15 +439,17 @@ R.draw = function (dt) {
     const far = R.far[q]; let budget = q === 2 ? 5 : 16;
     for (let cy = c0y; cy <= c1y; cy++) for (let cx = c0x; cx <= c1x; cx++) {
       const key = cy * 64 + cx; let g = far.g.get(key);
-      if (!g) {
-        if (budget-- <= 0) { ctx.fillStyle = '#3f7a3a'; ctx.fillRect(cx * CH, cy * CH, CH, CH); continue; }
-        g = genChunk(cx, cy, q); far.g.set(key, g);
+      if (!g || g.stale) {
+        if (budget-- > 0) { g = { c: genChunk(cx, cy, q), stale: false }; far.g.set(key, g); }
+        else if (!g) { ctx.fillStyle = '#3f7a3a'; ctx.fillRect(cx * CH, cy * CH, CH, CH); continue; }
       }
-      ctx.drawImage(g, cx * CH, cy * CH, CH, CH);
+      ctx.drawImage(g.c, cx * CH, cy * CH, CH, CH);
     }
   }
 
   // ---- ground decals
+  const seeRect = (x, y, w, h) => x < ox + bw + 8 && x + w > ox - 8 && y < oy + bh + 8 && y + h > oy - 8;
+  for (const b of S.bridges) if (seeRect(b.x * TS, b.y * TS, b.w * TS, b.h * TS)) { const a = bridgeArt(b).deck; ctx.drawImage(a.c, b.x * TS - a.ax, b.y * TS - a.ay); }
   for (const b of S.buildings) { const base = bBase(b); if (inX(base.x) && inY(base.y)) drawSpr(ctx, apronOf(b), base.x, base.y - 6); }
   for (let i = R.marks.length - 1; i >= 0; i--) {
     const m = R.marks[i]; m.t += dt;
@@ -419,7 +476,9 @@ R.draw = function (dt) {
   for (const w of S.workers) if (inX(w.x) && inY(w.y)) ents.push({ y: w.y, w });
   if (UI.inGame && inX(P.x) && inY(P.y)) ents.push({ y: P.y, me: P });
   for (const f of R.falls) ents.push({ y: f.y + 0.5, f });
-  if (R.ghost) ents.push({ y: (R.ghost.ty + BUILD[R.ghost.type].h) * TS - 1, ghost: R.ghost });
+  for (const b of S.bridges) if (!b.v && seeRect(b.x * TS, b.y * TS, b.w * TS, b.h * TS)) ents.push({ y: (b.y + b.h) * TS - 3, rail: b });
+  for (let r = 0; r < NT; r++) { const A = W.anc[r]; if (A.x > ox - 100 && A.x < ox + bw + 100 && A.y > oy - 20 && A.y < oy + bh + 240) ents.push({ y: A.y, anc: r }); }
+  if (R.ghost) ents.push({ y: R.ghost.bridge ? (R.ghost.bridge.y + R.ghost.bridge.h) * TS + 4 : (R.ghost.ty + BUILD[R.ghost.type].h) * TS - 1, ghost: R.ghost });
   ents.sort((a, b) => a.y - b.y);
 
   if (q === 1) {
@@ -460,10 +519,10 @@ R.draw = function (dt) {
 
   for (let i = R.falls.length - 1; i >= 0; i--) {
     const f = R.falls[i]; f.t += dt;
-    if (f.t >= 0.75) {
+    if (f.t >= f.dur) {
       R.falls.splice(i, 1);
-      const lc = leafCols(f.k - 1), h = ART.tree[f.k - 1][f.v][2].h;
-      for (let n = 0; n < 16; n++) { const u = 0.3 + Math.random() * 0.7; addPart({ x: f.x + f.dir * h * u, y: f.y - 2, vx: (Math.random() - 0.5) * 40, vy: -18 - Math.random() * 30, g: 70, max: 0.9, col: n % 4 === 0 ? '#c8b890' : lc[n % 3], sz: n % 5 === 0 ? 2 : 1 }); }
+      const lc = leafCols(f.k - 1), h = f.anc != null ? ART.anc[f.anc][1].h : ART.tree[f.k - 1][f.v][2].h;
+      for (let n = 0; n < (f.anc != null ? 60 : 16); n++) { const u = 0.3 + Math.random() * 0.7; addPart({ x: f.x + f.dir * h * u, y: f.y - 2, vx: (Math.random() - 0.5) * 40, vy: -18 - Math.random() * 30, g: 70, max: 0.9, col: n % 4 === 0 ? '#c8b890' : lc[n % 3], sz: n % 5 === 0 ? 2 : 1 }); }
     }
   }
   if (q > 1) { R.parts.length = 0; R.floats.length = 0; return; }
@@ -475,6 +534,13 @@ R.draw = function (dt) {
     ctx.fillStyle = '#1c120c'; ctx.fillRect(x - 1, y - 1, 16, 4);
     ctx.fillStyle = '#5a3a26'; ctx.fillRect(x, y, 14, 2);
     ctx.fillStyle = '#ffd84a'; ctx.fillRect(x, y, Math.round(14 * f), 2);
+  }
+  for (let r = 0; r < NT; r++) {
+    const a = S.anc[r]; if (a.done || a.hp >= ANCIENT_HP[r]) continue;
+    const A = W.anc[r], x = A.x - 16, y = A.y - ART.anc[r][1].h - 8, f = clamp(1 - a.hp / ANCIENT_HP[r], 0, 1);
+    ctx.fillStyle = '#1c120c'; ctx.fillRect(x - 1, y - 1, 34, 5);
+    ctx.fillStyle = '#5a3a26'; ctx.fillRect(x, y, 32, 3);
+    ctx.fillStyle = '#ffd84a'; ctx.fillRect(x, y, Math.round(32 * f), 3);
   }
   if (UI.inGame) P.queue.forEach((i, n) => { if (!isMature(i)) return; const t = treeXY(i), s = ART.tree[W.kind[i] - 1][W.vr[i]][2]; drawNum(ctx, '' + (n + 1), t.x + 1, t.y - s.h - 8 + Math.round(Math.sin(R.t * 5 + n)), '#ffd84a'); });
 
@@ -488,11 +554,20 @@ R.draw = function (dt) {
       else if (b.type === 'workshop') addPart({ x: base.x - 14, y: base.y - 58, vx: 3 + Math.random() * 4, vy: -9, max: 2.4, col: '#d8d8d4', sz: 2, smoke: 1 });
       else if (b.type === 'kiln' && S.workers.some(w => w.home === b.id && w.st === 'work')) for (let n = 0; n < 2; n++) addPart({ x: base.x - 1 + Math.random() * 4, y: base.y - 38, vx: 2 + Math.random() * 5, vy: -11, max: 2.8, col: n ? '#6a6a70' : '#3a3a40', sz: 2, smoke: 1 });
     }
-    for (let n = 0; n < 3; n++) {
+    for (let r = 0; r < NT; r++) {         // a glimmer about every Ancient tree still standing
+      const A = W.anc[r]; if (S.anc[r].done || !inX(A.x) || A.y < oy || A.y > oy + bh + 200) continue;
+      const sp = ART.anc[r][1];
+      addPart({ x: A.x + (Math.random() - 0.5) * sp.w * 0.8, y: A.y - Math.random() * sp.h * 0.9, vy: -5, max: 2.4, col: Math.random() < 0.5 ? '#ffe890' : '#ffffff', blink: 1 });
+    }
+    const sn = R.season;
+    for (let n = 0; n < (sn === 3 ? 8 : 3); n++) {
       const x = ox + Math.random() * bw, y = oy + Math.random() * bh, tx = Math.floor(x / TS), ty = Math.floor(y / TS);
       if (!inMap(tx, ty)) continue;
+      if (sn === 3) { addPart({ x, y, vx: 3 + Math.random() * 5, vy: 12 + Math.random() * 8, max: 3.2, col: Math.random() < 0.7 ? '#ffffff' : '#d4e2ee', sway: 1, sz: Math.random() < 0.25 ? 2 : 1 }); continue; }
       if (W.ter[idx(tx, ty)] === TER.WATER) { addPart({ x, y, max: 0.5, col: '#ffffff' }); continue; }
       const r = ringOf(zoneD(x, y, S.seed));
+      if (sn === 2 && r >= 1 && r <= 4) { const c = SEASON_COL[2][r]; addPart({ x, y, vx: 5 + Math.random() * 4, vy: 9, max: 3, col: Math.random() < 0.5 ? c : shade(c, 0.3), sway: 1 }); continue; }
+      if (sn === 0 && Math.random() < 0.45) { addPart({ x, y, vx: 6, vy: 6, max: 3.2, col: Math.random() < 0.5 ? '#f6b4c8' : '#ffffff', sway: 1 }); continue; }
       if (r === 3) addPart({ x, y, vx: 5, vy: 9, max: 3, col: Math.random() < 0.5 ? '#f08c28' : '#d8401c', sway: 1 });
       else if (r === 4) addPart({ x, y, vx: 7, vy: 7, max: 3.4, col: Math.random() < 0.6 ? '#f6b4c8' : '#ffffff', sway: 1 });
       else if (r === 6) addPart({ x, y, vx: 0, vy: -4, max: 2.6, col: '#8ff0e0', blink: 1 });
@@ -522,16 +597,22 @@ R.draw = function (dt) {
 // a tile-per-pixel overview of the whole forest
 R.minimap = function () {
   const c = newCanvas(MW, MH), g = c.getContext('2d'), id = g.createImageData(MW, MH), d = new Uint32Array(id.data.buffer);
-  const tc = TREES.map(t => C(shade(t.col, -0.12))), gc = GPAL.map(p => p[2]);
+  const tc = TREES.map((t, k) => C(shade(SEASON_COL[R.season][k] || t.col, -0.12))), gc = GPAL_S[R.season].map(p => p[2]);
   for (let y = 0; y < MH; y++) for (let x = 0; x < MW; x++) {
     const i = idx(x, y), k = W.kind[i];
-    if (W.ter[i] === TER.WATER) d[i] = WATER[2];
+    if (W.ter[i] === TER.WATER) d[i] = WATER_S[R.season][2];
+    else if (W.ter[i] === TER.BRIDGE) d[i] = C('#dca868');
     else if (k && W.g[i] >= 1) d[i] = tc[k - 1];
     else d[i] = gc[ringOf(zoneD(x * TS + 8, y * TS + 8, S.seed))];
   }
   g.putImageData(id, 0, 0);
   for (const b of S.buildings) { g.fillStyle = '#1c120c'; g.fillRect(b.x - 1, b.y - 1, BUILD[b.type].w + 2, BUILD[b.type].h + 2); g.fillStyle = b.type === 'yard' ? '#ffd84a' : b.type === 'cabin' ? '#ff7a5a' : b.type === 'lodge' ? '#e8a0ff' : '#ffffff'; g.fillRect(b.x, b.y, BUILD[b.type].w, BUILD[b.type].h); }
   for (const w of S.workers) { g.fillStyle = w.role === 'jack' ? '#ffffff' : '#9ad4ff'; g.fillRect(Math.floor(w.x / TS), Math.floor(w.y / TS), 1, 1); }
+  for (const b of S.bridges) { g.fillStyle = '#1c120c'; g.fillRect(b.x - 1, b.y - 1, b.w + 2, b.h + 2); g.fillStyle = '#ffd8a0'; g.fillRect(b.x, b.y, b.w, b.h); }
+  for (let r = 0; r < NT; r++) {       // Ancient trees: a gold mark while standing, grey once felled
+    const x = W.anc[r].i % MW, y = (W.anc[r].i / MW) | 0;
+    g.fillStyle = '#1c120c'; g.fillRect(x - 2, y - 2, 5, 5); g.fillStyle = S.anc[r].done ? '#9a9a9a' : '#ffe060'; g.fillRect(x - 1, y - 1, 3, 3);
+  }
   return c;
 };
 ;(window.__stage = window.__stage || []).push('render.js loaded');
