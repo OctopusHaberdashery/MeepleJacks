@@ -8,15 +8,15 @@ const CX = 96, CY = 96;        // the Lumber Yard sits here
 const NTILES = MW * MH;
 
 // Trees, from the middle of the map outward. Each ring is tougher to cut and worth more.
-//   hp: axe damage needed · logs: logs dropped · price: coins per log · regrow: seconds to grow back
+//   hp: axe damage needed · logs: logs dropped (1.5 means 2 and 1 by turns) · price: coins per log · regrow: seconds to grow back
 const TREES = [
-  { id: 'pine',    name: 'Pine',    hp: 4,  logs: 3, price: 2,   regrow: 120, col: '#2f7a45', bark: '#6a4428', wood: '#e2b87a' },
-  { id: 'birch',   name: 'Birch',   hp: 9,  logs: 3, price: 5,   regrow: 150, col: '#86b83e', bark: '#deded2', wood: '#f2deb0' },
-  { id: 'oak',     name: 'Oak',     hp: 16, logs: 4, price: 12,  regrow: 190, col: '#458a32', bark: '#5a3c22', wood: '#c89858' },
-  { id: 'maple',   name: 'Maple',   hp: 26, logs: 4, price: 28,  regrow: 240, col: '#d8601c', bark: '#6a4a3a', wood: '#e8b078' },
-  { id: 'cherry',  name: 'Cherry',  hp: 38, logs: 5, price: 65,  regrow: 300, col: '#e486a8', bark: '#4a2a2a', wood: '#c8644a' },
-  { id: 'redwood', name: 'Redwood', hp: 54, logs: 6, price: 150, regrow: 380, col: '#2a663a', bark: '#8a3a22', wood: '#b8482c' },
-  { id: 'ebony',   name: 'Ebony',   hp: 74, logs: 6, price: 340, regrow: 480, col: '#2f4a7e', bark: '#2a2230', wood: '#4a3c52' },
+  { id: 'pine',    name: 'Pine',    hp: 4,  logs: 1.5, price: 2,   regrow: 120, col: '#2f7a45', bark: '#6a4428', wood: '#e2b87a' },
+  { id: 'birch',   name: 'Birch',   hp: 9,  logs: 1.5, price: 5,   regrow: 150, col: '#86b83e', bark: '#deded2', wood: '#f2deb0' },
+  { id: 'oak',     name: 'Oak',     hp: 16, logs: 2,   price: 12,  regrow: 190, col: '#458a32', bark: '#5a3c22', wood: '#c89858' },
+  { id: 'maple',   name: 'Maple',   hp: 26, logs: 2,   price: 28,  regrow: 240, col: '#d8601c', bark: '#6a4a3a', wood: '#e8b078' },
+  { id: 'cherry',  name: 'Cherry',  hp: 38, logs: 2.5, price: 65,  regrow: 300, col: '#e486a8', bark: '#4a2a2a', wood: '#c8644a' },
+  { id: 'redwood', name: 'Redwood', hp: 54, logs: 3,   price: 150, regrow: 380, col: '#2a663a', bark: '#8a3a22', wood: '#b8482c' },
+  { id: 'ebony',   name: 'Ebony',   hp: 74, logs: 3,   price: 340, regrow: 480, col: '#2f4a7e', bark: '#2a2230', wood: '#4a3c52' },
 ];
 const NT = TREES.length;
 // how thickly each kind grows (the broad-crowned trees need more elbow room)

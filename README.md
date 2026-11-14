@@ -12,6 +12,7 @@ A cozy pixel-art logging camp for Android tablets, in the spirit of
 You start with a rusty hatchet and a Lumber Yard in the middle of a big forest.
 
 - **Chop your own tree.** Tap a pine and your Meeple walks over, fells it and carries the logs to the yard.
+  A tree gives one to three logs, more for the far-out kinds.
 - **Sell the wood**, but hold some back: buildings and axes cost goods as well as coins.
 - **Hire a crew.** Lumberjacks cut the nearest trees to their cabin, however far that takes them, and haulers
   carry the log piles in. A cabin can be set to one kind of wood, and any building can be moved for free.
@@ -41,7 +42,7 @@ You start with a rusty hatchet and a Lumber Yard in the middle of a big forest.
 
   A cabin can also take a **foreman**, who makes its crew 30% faster.
 - **The Great Lodge** is the long project: seven storeys, one per wood, each raised in three steps and each with a
-  lasting reward. Finishing it is the end of the game (about 14 hours for a tireless autoplayer; expect nearer 20).
+  lasting reward. Finishing it is the end of the game (about 26 hours for a tireless autoplayer; a person will take longer).
 - **Orders** from the neighbours pay well over the usual price, and each one filled raises your standing with them.
 - **Hats and silly walks.** Felling trees sometimes shakes a hat loose (21 to find, three per kind of tree). Wear
   them, dress the crew, and choose how your Meeple gets about: waddle, moonwalk, cartwheel, backflips...

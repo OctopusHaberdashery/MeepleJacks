@@ -200,7 +200,7 @@ const PANELS = {
         const T = TREES[t], can = canCut(S.axe, t + 1), hats = HATS.filter(h => h.tree === t), found = hats.filter(h => S.hats.includes(h.id)).length;
         b += `<div class="card row"><img class="timg" src="${ART.url['tree' + t]}"><div class="grow"><div class="t">${T.name}</div>
           <div class="s">${t === 0 ? 'Right around the yard' : 'From about ' + RINGS[t] + ' tiles out'}</div>
-          <div class="s">${can ? Math.ceil(T.hp / S.axe) + ' swings to fell' : 'Needs the ' + AXES[t + 1].name} · drops ${T.logs} logs</div>
+          <div class="s">${can ? Math.ceil(T.hp / S.axe) + ' swings to fell' : 'Needs the ' + AXES[t + 1].name} · drops ${T.logs % 1 ? Math.floor(T.logs) + ' or ' + Math.ceil(T.logs) : T.logs} logs</div>
           <span class="chip">${ico('coin')}${T.price} a log</span><span class="chip">regrows in ${fmtTime(T.regrow)}</span><span class="chip">${ico('hats')}${found}/${hats.length} hats</span></div></div>`;
       }
     }

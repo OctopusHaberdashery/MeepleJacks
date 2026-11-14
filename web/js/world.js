@@ -231,7 +231,9 @@ function hitTree(i, dmg, who) {
 function fellTree(i, who) {
   const k = W.kind[i], T = TREES[k - 1], p = treeXY(i), me = who === S.player;
   W.hp.delete(i); W.claim.delete(i); setGrow(i, 0); W.growing.add(i);
-  const pile = { id: S.nextId++, i, type: k - 1, n: T.logs, res: 0, t: 0.75 };
+  // a half-log yield alternates: the 1st, 3rd, 5th… tree of a kind drops the extra log
+  const logs = Math.floor(T.logs) + (T.logs % 1 && S.stats.cut[k - 1] % 2 === 0 ? 1 : 0);
+  const pile = { id: S.nextId++, i, type: k - 1, n: logs, res: 0, t: 0.75 };
   S.piles.push(pile); W.pileAt.set(i, pile); W.pileById.set(pile.id, pile);
   S.stats.chopped++; S.stats.cut[k - 1]++; S.seen[k - 1] = 1;
   EV.push({ t: 'fall', x: p.x, y: p.y, k, v: W.vr[i], dir: who.x < p.x ? 1 : -1, me });
