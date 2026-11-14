@@ -31,9 +31,11 @@ You start with a rusty hatchet and a Lumber Yard in the middle of a big forest.
 
 - **Fell the Ancient trees.** One giant stands in every ring (the Map marks them in gold). It is far too much
   tree for one axe, so tap it and call your lumberjacks: up to twelve leave their own trees to help. When it comes
-  down it leaves a great heap of logs and a hat, and the next river can be bridged.
-- **Bridge the rivers.** A bridge is the only way over a river, and the first one over each river has to wait for
-  that ring's Ancient tree. It can go anywhere along the bank, and extra bridges save the crew long walks. Move a
+  down it drops a hat and leaves a heap of great timbers by its stump.
+- **Bridge the rivers.** Each river has one crossing place, somewhere different in every forest and every game.
+  The bridge there is made of the Ancient tree's timbers and nothing else: press **Send all haulers** when the
+  tree falls (or later, from the stump or the crossing) and they carry the timbers over and hammer them in, plank
+  by plank. They haul no logs while they are at it, and you can carry timbers yourself. Once it is finished, move a
   cabin across so its lumberjacks are close to the new wood.
 - **Work the wood.** Later buildings bring new kinds of Meeple:
 
@@ -62,7 +64,7 @@ You start with a rusty hatchet and a Lumber Yard in the middle of a big forest.
 
   Each season also has a fair of its own that sends extra orders for one kind of goods at a better price.
 - **The Great Lodge** is the long project: seven storeys, one per wood, each raised in three steps and each with a
-  lasting reward. Finishing it is the end of the game (about 15 hours for a tireless autoplayer; a person will take
+  lasting reward. Finishing it is the end of the game (about 16 hours for a tireless autoplayer; a person will take
   a good deal longer).
 - **Orders** from the neighbours pay well over the usual price, and each one filled raises your standing with them.
 - **Hats and silly walks.** Felling trees sometimes shakes a hat loose (25 to find: three per kind of tree, and

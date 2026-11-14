@@ -249,6 +249,7 @@ R.onEvent = function (e) {
       if (!seen) break;
       if (e.role === 'sawyer') { AUDIO.sfx('saw', vol); for (let i = 0; i < 4; i++) addPart({ x: e.x - 8 + Math.random() * 4, y: e.y - 12, vx: -8 - Math.random() * 20, vy: -10 - Math.random() * 20, g: 90, max: 0.6, col: i & 1 ? '#f0d890' : '#d8b860' }); }
       else if (e.role === 'collier') { AUDIO.sfx('crackle', vol); for (let i = 0; i < 3; i++) addPart({ x: e.x - 3 + Math.random() * 6, y: e.y - 6, vx: (Math.random() - 0.5) * 12, vy: -22 - Math.random() * 14, max: 0.8, col: i & 1 ? '#ffd84a' : '#f07a1a' }); }
+      else if (e.role === 'span') { AUDIO.sfx('tap', vol * 0.8); for (let i = 0; i < 2; i++) addPart({ x: e.wx, y: e.wy - 8, vx: (Math.random() - 0.5) * 30, vy: -24, g: 120, max: 0.4, col: i ? '#dca868' : '#a06c38' }); }
       else { AUDIO.sfx('tap', vol); for (let i = 0; i < 2; i++) addPart({ x: e.wx, y: e.wy - 8, vx: (Math.random() - 0.5) * 30, vy: -24, g: 120, max: 0.4, col: '#e8b078' }); }
       break;
     case 'hat': burst(e.x, e.y - 20, ['#e8508a', '#f6c83c', '#58e0d0', '#ffffff'], 30, 20); break;
@@ -285,7 +286,7 @@ function drawMeeple(ctx, e, role, col, hat, gait, axeLv, swingT) {
     gaitPose(gait, e.walkT, o);
     if (o.legs) { const ph = Math.floor(e.walkT * 9) & 3; f = ph === 1 ? fr.walkA : ph === 3 ? fr.walkB : fr.stand; }
     if (o.flip) face = -face;
-  } else if (e.st === 'work') o.bob = Math.sin(R.t * 12 + e.x) > 0 ? -1 : 0;
+  } else if (e.st === 'work' || e.st === 'hammer') o.bob = Math.sin(R.t * 12 + e.x) > 0 ? -1 : 0;
   else if (e.st === 'plant') { o.rot = 0.45; o.bob = Math.sin(R.t * 10) > 0 ? 1 : 0; }
   ctx.fillStyle = 'rgba(10,26,16,0.3)'; ctx.fillRect(x - 5, y - 1, 10, 2); ctx.fillRect(x - 4, y + 1, 8, 1);
   let ang = -0.5;
@@ -351,6 +352,27 @@ function drawFall(ctx, f) {
   ctx.drawImage(s.c, -s.ax, -s.ay);
   ctx.restore();
 }
+// A bridge, or as much of one as has been built: f is the fraction, growing from the yard side. near: the handrail in front.
+function drawSpan(ctx, s, f, near) {
+  const a = bridgeArt(s)[near ? 'rail' : 'deck']; if (!a) return;
+  const len = (s.v ? s.h : s.w) * TS, done = Math.round(len * f);
+  if (f >= 1) { ctx.drawImage(a.c, s.x * TS - a.ax, s.y * TS - a.ay); return; }
+  if (!near) {            // old pilings mark the crossing before the deck reaches them
+    for (let p = 4; p < len; p += 8) for (const c of [3, 2 * TS - 5]) {
+      const x = s.v ? s.x * TS + c : s.x * TS + p, y = s.v ? s.y * TS + p : s.y * TS + c;
+      ctx.fillStyle = '#1c120c'; ctx.fillRect(x - 1, y - 4, 4, 7); ctx.fillStyle = '#6e4622'; ctx.fillRect(x, y - 3, 2, 5); ctx.fillStyle = '#c08a4e'; ctx.fillRect(x, y - 3, 2, 1);
+      ctx.fillStyle = 'rgba(255,255,255,0.5)'; ctx.fillRect(x - 2, y + 3, 6, 1);
+    }
+  }
+  if (done <= 0) return;
+  // the built part: a slice of the finished picture, from the yard end
+  const W0 = a.c.width, H0 = a.c.height, pad = s.v ? a.ay : a.ax, end = (s.v ? H0 : W0) - len - pad;
+  const from = s.lo ? 0 : pad + len - done, size = done + (s.lo ? pad : end);
+  if (s.v) ctx.drawImage(a.c, 0, from, W0, size, s.x * TS - a.ax, s.y * TS - a.ay + from, W0, size);
+  else ctx.drawImage(a.c, from, 0, size, H0, s.x * TS - a.ax + from, s.y * TS - a.ay, size, H0);
+}
+// how much of the bridge over river k stands: 1 once it is finished
+const spanFrac = k => k <= S.reach ? 1 : spanOpen(k) ? S.span[k].got / ANCIENT_TIMBER[k - 1] : 0;
 function drawAncient(ctx, r) {
   const A = W.anc[r], P = S.player;
   if (S.anc[r].done) {
@@ -376,13 +398,12 @@ function drawEnt(ctx, e) {
   else if (e.me) drawMeeple(ctx, e.me, 'player', 0, S.hat, S.gait, S.axe, PLAYER_SWING);
   else if (e.boss) drawMeeple(ctx, e.boss, 'foreman', 0, null, 0, 0, 1);
   else if (e.f) drawFall(ctx, e.f);
-  else if (e.rail) { const a = bridgeArt(e.rail).rail; ctx.drawImage(a.c, e.rail.x * TS - a.ax, e.rail.y * TS - a.ay); }
+  else if (e.rail) drawSpan(ctx, e.rail, e.frac, true);
   else if (e.anc != null) drawAncient(ctx, e.anc);
-  else if (e.ghost && e.ghost.bridge) {
-    const b = e.ghost.bridge, a = bridgeArt(b).deck;
-    ctx.fillStyle = b.ok ? 'rgba(120,255,120,0.35)' : 'rgba(255,80,60,0.45)';
-    ctx.fillRect(b.x * TS - 2, b.y * TS - 2, b.w * TS + 4, b.h * TS + 4);
-    ctx.globalAlpha = 0.85; ctx.drawImage(a.c, b.x * TS - a.ax, b.y * TS - a.ay); ctx.globalAlpha = 1;
+  else if (e.heap != null) {
+    const h = heapSpot(e.heap), n = S.anc[e.heap].heap;
+    drawSpr(ctx, ART.pile[e.heap][6], h.x - 7, h.y - 1); drawSpr(ctx, ART.pile[e.heap][n > 40 ? 6 : n > 12 ? 5 : 3], h.x + 7, h.y + 2);
+    if (R.q === 1) drawNum(ctx, '' + n, h.x + 1, h.y - 24, '#fff4d0');
   }
   else if (e.ghost) {
     const gh = e.ghost, B = BUILD[gh.type], s = gh.type === 'lodge' ? ART.spr['lodge' + Math.min(S.lodgeStage, LODGE.length)] : ART.spr[gh.type];
@@ -449,7 +470,7 @@ R.draw = function (dt) {
 
   // ---- ground decals
   const seeRect = (x, y, w, h) => x < ox + bw + 8 && x + w > ox - 8 && y < oy + bh + 8 && y + h > oy - 8;
-  for (const b of S.bridges) if (seeRect(b.x * TS, b.y * TS, b.w * TS, b.h * TS)) { const a = bridgeArt(b).deck; ctx.drawImage(a.c, b.x * TS - a.ax, b.y * TS - a.ay); }
+  for (let k = 1; k < NT; k++) { const s = W.site[k]; if (seeRect(s.x * TS, s.y * TS, s.w * TS, s.h * TS)) drawSpan(ctx, s, spanFrac(k), false); }
   for (const b of S.buildings) { const base = bBase(b); if (inX(base.x) && inY(base.y)) drawSpr(ctx, apronOf(b), base.x, base.y - 6); }
   for (let i = R.marks.length - 1; i >= 0; i--) {
     const m = R.marks[i]; m.t += dt;
@@ -476,9 +497,10 @@ R.draw = function (dt) {
   for (const w of S.workers) if (inX(w.x) && inY(w.y)) ents.push({ y: w.y, w });
   if (UI.inGame && inX(P.x) && inY(P.y)) ents.push({ y: P.y, me: P });
   for (const f of R.falls) ents.push({ y: f.y + 0.5, f });
-  for (const b of S.bridges) if (!b.v && seeRect(b.x * TS, b.y * TS, b.w * TS, b.h * TS)) ents.push({ y: (b.y + b.h) * TS - 3, rail: b });
+  for (let k = 1; k < NT; k++) { const s = W.site[k], f = spanFrac(k); if (!s.v && f > 0 && seeRect(s.x * TS, s.y * TS, s.w * TS, s.h * TS)) ents.push({ y: (s.y + s.h) * TS - 3, rail: s, frac: f }); }
+  for (let r = 0; r < NT - 1; r++) if (S.anc[r].heap > 0) { const h = heapSpot(r); if (inX(h.x) && inY(h.y) && !R.falls.some(f => f.anc === r)) ents.push({ y: h.y + 2, heap: r }); }
   for (let r = 0; r < NT; r++) { const A = W.anc[r]; if (A.x > ox - 100 && A.x < ox + bw + 100 && A.y > oy - 20 && A.y < oy + bh + 240) ents.push({ y: A.y, anc: r }); }
-  if (R.ghost) ents.push({ y: R.ghost.bridge ? (R.ghost.bridge.y + R.ghost.bridge.h) * TS + 4 : (R.ghost.ty + BUILD[R.ghost.type].h) * TS - 1, ghost: R.ghost });
+  if (R.ghost) ents.push({ y: (R.ghost.ty + BUILD[R.ghost.type].h) * TS - 1, ghost: R.ghost });
   ents.sort((a, b) => a.y - b.y);
 
   if (q === 1) {
@@ -608,7 +630,10 @@ R.minimap = function () {
   g.putImageData(id, 0, 0);
   for (const b of S.buildings) { g.fillStyle = '#1c120c'; g.fillRect(b.x - 1, b.y - 1, BUILD[b.type].w + 2, BUILD[b.type].h + 2); g.fillStyle = b.type === 'yard' ? '#ffd84a' : b.type === 'cabin' ? '#ff7a5a' : b.type === 'lodge' ? '#e8a0ff' : '#ffffff'; g.fillRect(b.x, b.y, BUILD[b.type].w, BUILD[b.type].h); }
   for (const w of S.workers) { g.fillStyle = w.role === 'jack' ? '#ffffff' : '#9ad4ff'; g.fillRect(Math.floor(w.x / TS), Math.floor(w.y / TS), 1, 1); }
-  for (const b of S.bridges) { g.fillStyle = '#1c120c'; g.fillRect(b.x - 1, b.y - 1, b.w + 2, b.h + 2); g.fillStyle = '#ffd8a0'; g.fillRect(b.x, b.y, b.w, b.h); }
+  for (let k = 1; k < NT; k++) {       // crossings: pale once bridged, a hollow mark until then
+    const b = W.site[k]; g.fillStyle = '#1c120c'; g.fillRect(b.x - 1, b.y - 1, b.w + 2, b.h + 2);
+    g.fillStyle = k <= S.reach ? '#ffd8a0' : spanOpen(k) ? '#ff9a4a' : '#7a6a5a'; g.fillRect(b.x, b.y, b.w, b.h);
+  }
   for (let r = 0; r < NT; r++) {       // Ancient trees: a gold mark while standing, grey once felled
     const x = W.anc[r].i % MW, y = (W.anc[r].i / MW) | 0;
     g.fillStyle = '#1c120c'; g.fillRect(x - 2, y - 2, 5, 5); g.fillStyle = S.anc[r].done ? '#9a9a9a' : '#ffe060'; g.fillRect(x - 1, y - 1, 3, 3);

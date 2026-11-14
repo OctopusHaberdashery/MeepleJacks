@@ -25,15 +25,18 @@ const DENSITY = [1, 1, 0.82, 0.8, 0.74, 0.74, 0.6];
 const RINGS = [4.5, 21, 35, 49, 62, 74, 85];
 
 // A river runs all the way round the camp where each ring gives way to the next, so the forest is a
-// set of islands inside islands. Each river needs a bridge, and the first bridge over a river can
-// only be built once the Ancient tree of the ring inside it has come down.
+// set of islands inside islands. Each river has one crossing place, somewhere different in every forest.
+// The bridge there is built from the timbers of the Ancient tree of the ring inside it: when the tree
+// comes down, haulers carry its timbers to the crossing and hammer them in.
 const RIVER_HALF = 1.25;       // half the width of a river, in tiles
-const BRIDGE_MAX = 12;         // the longest a bridge can be, in tiles
-const BRIDGE_COINS = [0, 60, 300, 1200, 5000, 20000, 70000];
+const BRIDGE_MAX = 8;          // the longest a crossing may be, in tiles
 const RIVER_NAMES = ['', 'First', 'Second', 'Third', 'Fourth', 'Fifth', 'Sixth'];
-// One Ancient tree stands in each ring. It takes hp axe damage to fell (bring the crew) and drops a great heap of logs and a hat.
-const ANCIENT_HP = [320, 900, 2000, 4000, 7200, 12000, 20000];
-const ANCIENT_LOGS = [40, 50, 60, 70, 80, 90, 100];
+// One Ancient tree stands in each ring. It takes hp axe damage to fell (bring the crew).
+const ANCIENT_HP = [1000, 2800, 6000, 12000, 22000, 36000, 60000];
+// The timbers the Ancient tree of ring r leaves, which is what the bridge over the river beyond it takes.
+const ANCIENT_TIMBER = [60, 100, 150, 210, 280, 360];
+const ANCIENT_LOGS = 100;      // the last Ancient tree has no river beyond it: it leaves ordinary logs
+const BRIDGE_TIME = 1.5;       // seconds to hammer one timber into a bridge
 const ANCIENT_CREW = 12;       // how many lumberjacks can swing at one at once
 
 // ---------------------------------------------------------------- seasons
@@ -89,11 +92,6 @@ const UPG = {
 function upgCost(k, lvl) {
   const U = UPG[k];
   return { coins: Math.round(U.base * Math.pow(U.mult, lvl)), wood: U.item ? [[U.item[0], U.item[1] * (lvl + 1)]] : [] };
-}
-
-// A bridge over river k (1 = between Pine and Birch). Each extra bridge over the same river costs twice the coins.
-function bridgeCost(k, extra) {
-  return { coins: BRIDGE_COINS[k] * Math.pow(2, extra || 0), wood: [[k <= 2 ? LOG(k - 1) : PLANK(k - 1), 10 + 10 * k]] };
 }
 
 const PLAYER_CARRY = 3, HAULER_CARRY = 6, CARTER_CARRY = 20, DEPOT_ROOM = 300;
@@ -243,12 +241,12 @@ const GOALS = [
   { id: 'hauler1',  t: 'Hire a hauler',              d: 'Haulers carry log piles back to the yard.',                    key: 'r:hauler',  n: 1,  r: 15 },
   { id: 'anc0',     t: 'Fell the Ancient Pine',      d: 'A giant stands among the pines: see the Map. Tap it and call your lumberjacks.', key: 'anc', n: 1, r: 30 },
   { id: 'axe2',     t: 'Forge an Iron Axe',          d: 'Yard ➜ Workshop: yours or the crew\'s. Birch grows across the river.', key: 'axe', n: 2,  r: 20 },
-  { id: 'bridge1',  t: 'Bridge the First River',     d: 'Build ➜ Bridge. Then move a cabin across so its crew is near the Birch.', key: 'reach', n: 1, r: 40 },
+  { id: 'bridge1',  t: 'Bridge the First River',     d: 'Tap the stump and send the haulers: they carry its timbers to the crossing and hammer them in.', key: 'reach', n: 1, r: 40 },
   { id: 'birch10',  t: 'Sell 10 Birch logs',         d: 'Tap a cabin, then Move, to put its crew over the bridge.',                  key: 'sold1',     n: 10, r: 40 },
   { id: 'crew4',    t: 'Have a crew of 4',           d: 'Lumberjacks cut; haulers fetch. Keep them in balance.',        key: 'workers',   n: 4,  r: 60 },
   { id: 'axe3',     t: 'Forge a Steel Axe',          d: 'Yours or the crew\'s. Each new axe opens the next ring.',      key: 'axe',       n: 3,  r: 100 },
   { id: 'anc1',     t: 'Fell the Ancient Birch',     d: 'Each ring has one giant. Its fall opens the way over the next river.', key: 'anc', n: 2, r: 120 },
-  { id: 'bridge2',  t: 'Bridge the Second River',    d: 'Oak grows on the far bank. A second bridge over a river saves long walks.', key: 'reach', n: 2, r: 150 },
+  { id: 'bridge2',  t: 'Bridge the Second River',    d: 'The Map shows the crossing. Haulers on the bridge are not hauling logs.', key: 'reach', n: 2, r: 150 },
   { id: 'oak20',    t: 'Sell 20 Oak logs',           d: 'Move a cabin over the bridges and set it to cut only Oak.',  key: 'sold2',     n: 20, r: 200 },
   { id: 'cabins2',  t: 'Build a second cabin',       d: 'Cabins can be moved for free whenever you like.',              key: 'cabins',    n: 2,  r: 250 },
   { id: 'forester', t: "Build a Forester's Hut",     d: 'Foresters replant stumps so cut land grows back sooner.',      key: 'b:forester', n: 1, r: 300 },
@@ -258,7 +256,7 @@ const GOALS = [
   { id: 'order1',   t: 'Fill an order',              d: 'Yard ➜ Orders. Neighbours pay well over the usual price.',     key: 'orders',    n: 1,  r: 500 },
   { id: 'hat1',     t: 'Find a hat',                 d: 'Hats hide in trees. Felling them yourself shakes them loose sooner.', key: 'hats', n: 1, r: 300 },
   { id: 'anc2',     t: 'Fell the Ancient Oak',       d: 'Call the lumberjacks: it is far too much for one axe.',        key: 'anc',       n: 3,  r: 500 },
-  { id: 'bridge3',  t: 'Bridge the Third River',     d: 'This one wants Oak planks. Forge the Felling Axe for Maple.',  key: 'reach',     n: 3,  r: 600 },
+  { id: 'bridge3',  t: 'Bridge the Third River',     d: 'A bigger river and a bigger bridge. Forge the Felling Axe for Maple.',  key: 'reach',     n: 3,  r: 600 },
   { id: 'maple30',  t: 'Sell 30 Maple logs',         d: 'The Maple ring glows orange.',                                 key: 'sold3',     n: 30, r: 600 },
   { id: 'kiln',     t: 'Build a Charcoal Kiln',      d: 'Charcoal turns cheap Pine into good money.',                   key: 'b:kiln',    n: 1,  r: 800 },
   { id: 'char30',   t: 'Burn 30 sacks of charcoal',  d: 'Hire a collier at the kiln.',                                  key: 'made:char', n: 30, r: 1000 },

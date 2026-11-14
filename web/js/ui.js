@@ -32,7 +32,7 @@ function applySettings() {
 }
 
 // ---------------------------------------------------------------- state, toasts, modals
-const UI = { inGame: false, paused: false, panel: null, tab: 'sell', bid: 0, ancR: 0, place: null, hatFor: 'you', hud: {}, panelHtml: '', panelTouch: false, modalAct: null, modalBack: null };
+const UI = { inGame: false, paused: false, panel: null, tab: 'sell', bid: 0, ancR: 0, spanK: 1, place: null, hatFor: 'you', hud: {}, panelHtml: '', panelTouch: false, modalAct: null, modalBack: null };
 
 function toast(msg, kind, icon) {
   const el = document.createElement('div');
@@ -180,6 +180,18 @@ function sellCard(it) {
     <div class="row" style="margin-top:.4rem"><span class="s">Auto-sell</span><div class="toggle"><button class="${S.autosell[it] ? 'on' : ''}" data-a="auto" data-v="${it}|1">On</button><button class="${S.autosell[it] ? '' : 'on'}" data-a="auto" data-v="${it}|0">Off</button></div>
     <span class="s grow" style="text-align:right">Keep</span><div class="toggle"><button data-a="keep" data-v="${it}|-1">−</button><button class="mid" disabled>${fmt(k)}</button><button data-a="keep" data-v="${it}|1">+</button></div></div></div>`;
 }
+// where the bridge over river k has got to, and the buttons that get it built
+function spanBody(k) {
+  const sp = S.span[k], need = ANCIENT_TIMBER[k - 1], lock = bridgeLock(k);
+  if (k <= S.reach) return `<p class="s">Built. The ${TREES[k].name} is yours to cut.</p>`;
+  if (lock) return `<p class="s"><b>${lock}.</b> Its timbers are what the bridge is made of.</p><div class="row"><button class="btn grow" data-a="showanc" data-v="${k - 1}">Show the Ancient ${TREES[k - 1].name}</button></div>`;
+  const heap = S.anc[k - 1].heap, at = spanCrew(k), haulers = countRole('hauler');
+  return `<div class="bar" style="margin:.4rem 0 .15rem"><i style="width:${sp.got / need * 100}%"></i></div>
+    <div class="s">${sp.got} of ${need} timbers hammered in · ${heap} waiting by the stump${at ? ' · ' + at + ' hauler' + (at > 1 ? 's' : '') + ' at it' : ''}</div>
+    <div class="wk">${ico('hauler')}<div class="grow"><div class="t">The haulers <span class="s">${haulers} hired</span></div><div class="s">${!haulers ? 'Hire some at a cabin' : sp.call ? 'Sent. They carry and hammer until it is done, and haul no logs meanwhile' : 'They carry the timbers to the crossing and hammer them in'}</div></div>
+      <button class="btn sm ${sp.call ? '' : 'green'}" data-a="spansend" data-v="${k}|${sp.call ? 0 : 1}" ${haulers ? '' : 'disabled'}>${sp.call ? 'Call back' : 'Send all'}</button></div>
+    <div class="wk">${ico('player')}<div class="grow"><div class="t">You</div><div class="s">${playerCap()} timbers a trip, for as long as you leave your Meeple to it</div></div><button class="btn sm green" data-a="spancarry" data-v="${k}">Carry</button></div>`;
+}
 const PANELS = {
   yard() {
     const stock = S.inv.reduce((a, n) => a + n, 0);
@@ -247,16 +259,8 @@ const PANELS = {
     const head = `${ico('hammer')}<h2>Build<small>${S.buildings.length - 1} building${S.buildings.length === 2 ? '' : 's'} so far</small></h2>`;
     let b = '';
     const nk = S.reach + 1;
-    if (nk < NT) {
-      const lock = bridgeLock(nk), c = bridgeCost(nk, 0);
-      b += `<div class="card"><div class="row">${ico('bridge', 'xl')}<div class="grow"><div class="t">Bridge over the ${RIVER_NAMES[nk]} River</div><div class="s">The only way across to the ${TREES[nk].name}. It can go anywhere along the river, so choose a spot that suits your camp.</div></div></div>
-        <div class="row" style="margin-top:.45rem"><div class="grow">${lock ? `<span class="s">To unlock: ${lock}.</span>` : chips(c)}</div>${lock ? `<button class="btn" data-a="showanc" data-v="${nk - 1}">Show me</button>` : `<button class="btn green" data-a="place" data-v="bridge|${nk}" ${canAfford(c) ? '' : 'disabled'}>Place</button>`}</div></div>`;
-    }
-    if (S.reach >= 1) {
-      const c = bridgeCost(1, bridgesOver(1));
-      b += `<div class="card"><div class="row">${ico('bridge', 'lg')}<div class="grow"><div class="t">Another bridge <span class="s">× ${S.bridges.length} so far</span></div><div class="s">A second way over a river you have already bridged saves the crew long walks. Each extra one over the same river costs twice the coins.</div></div></div>
-        <div class="row" style="margin-top:.45rem"><div class="grow"><span class="chip">${ico('coin')}from ${fmt(c.coins)}</span></div><button class="btn green" data-a="place" data-v="bridge|0">Place</button></div></div>`;
-    }
+    if (nk < NT) b += `<div class="card"><div class="row">${ico('bridge', 'xl')}<div class="grow"><div class="t">Bridge over the ${RIVER_NAMES[nk]} River</div><div class="s">The only way across to the ${TREES[nk].name}. It is built at the river's one crossing place, from the timbers of the Ancient ${TREES[nk - 1].name}.</div></div></div>
+      ${spanBody(nk)}<div class="row" style="margin-top:.45rem"><button class="btn grow" data-a="showspan" data-v="${nk}">Show the crossing</button></div></div>`;
     for (const type of ['cabin', 'forester', 'sawmill', 'kiln', 'depot', 'workshop', 'lodge']) {
       const B = BUILD[type], img = type === 'lodge' ? ART.url.lodge : ART.url[type];
       if (!unlocked(type)) { b += `<div class="card locked row"><img class="bimg" src="${img}" style="filter:brightness(0) opacity(.45)"><div class="grow"><div class="t">${B.name}</div><div class="s">To unlock: ${B.need[2]}.</div></div></div>`; continue; }
@@ -287,15 +291,11 @@ const PANELS = {
     const r = UI.ancR, a = S.anc[r], T = TREES[r], name = 'Ancient ' + T.name;
     if (a.done) {
       let b = `<div class="row"><img class="bimg" src="${ART.url['ancStump' + r]}"><div class="grow"><div class="t">Felled</div><div class="s">Only the stump is left, and it will be here for a hundred years.</div></div></div>`;
-      if (r + 1 < NT) {
-        const k = r + 1, done = S.reach >= k, c = bridgeCost(k, 0);
-        b += `<div class="sec">The ${RIVER_NAMES[k]} River</div>` + (done ? `<p class="s">Bridged. The ${TREES[k].name} is yours to cut.</p>`
-          : `<p class="s">With the ${name} down, the river can be bridged to reach the ${TREES[k].name}.</p><div class="row"><div class="grow">${chips(c)}</div><button class="btn green" data-a="place" data-v="bridge|${k}" ${canAfford(c) ? '' : 'disabled'}>Place a bridge</button></div>`);
-      }
+      if (r + 1 < NT) b += `<div class="sec">The bridge over the ${RIVER_NAMES[r + 1]} River</div>${spanBody(r + 1)}<div class="row" style="margin-top:.45rem"><button class="btn grow" data-a="showspan" data-v="${r + 1}">Show the crossing</button></div>`;
       return [`${ico('star')}<h2>${name}<small>felled</small></h2>`, '', b];
     }
     const far = r > S.reach, at = W.ancSlots[r].filter(Boolean).length, jacks = countRole('jack');
-    let b = `<div class="row"><img class="bimg tall" src="${ART.url['anc' + r]}"><div class="grow"><div class="s">The oldest ${T.name} in the forest, and far too much tree for one axe. When it falls it leaves <b>${ANCIENT_LOGS[r]} ${T.name} logs</b> and <b>a hat</b>${r + 1 < NT ? `, and the <b>${RIVER_NAMES[r + 1]} River</b> can be bridged` : ''}.</div>
+    let b = `<div class="row"><img class="bimg tall" src="${ART.url['anc' + r]}"><div class="grow"><div class="s">The oldest ${T.name} in the forest, and far too much tree for one axe. When it falls it leaves <b>a hat</b> and ${r + 1 < NT ? `<b>${ANCIENT_TIMBER[r]} great timbers</b>: everything the bridge over the <b>${RIVER_NAMES[r + 1]} River</b> is made of` : `<b>${ANCIENT_LOGS} ${T.name} logs</b>`}.</div>
       <div class="bar" style="margin:.4rem 0 .15rem"><i style="width:${(1 - a.hp / ANCIENT_HP[r]) * 100}%"></i></div><div class="s">${fmt(ANCIENT_HP[r] - a.hp)} of ${fmt(ANCIENT_HP[r])} chopped${at ? ' · ' + at + ' lumberjack' + (at > 1 ? 's' : '') + ' at it' : ''}</div></div></div>`;
     if (far) b += `<p class="s"><b>It stands beyond the ${RIVER_NAMES[r]} River.</b> Bridge that first.</p>`;
     const mine = !far && canCut(S.axe, r + 1), crew = !far && canCut(S.crewAxe, r + 1);
@@ -303,6 +303,12 @@ const PANELS = {
     b += `<div class="wk">${ico('jack')}<div class="grow"><div class="t">The lumberjacks <span class="s">${jacks} hired</span></div><div class="s">${far ? 'Out of reach' : !crew ? 'The crew need the ' + AXES[r + 1].name : !jacks ? 'Hire some at a cabin' : a.call ? 'Called: they come as they finish their trees' : 'Up to ' + ANCIENT_CREW + ' will leave their own trees to help'}</div></div>
       <button class="btn sm ${a.call ? '' : 'green'}" data-a="anccall" data-v="${r}|${a.call ? 0 : 1}" ${crew && jacks ? '' : 'disabled'}>${a.call ? 'Send back' : 'Call them'}</button></div>`;
     return [`${ico('star')}<h2>${name}<small>${fmt(a.hp)} left to chop</small></h2>`, '', b];
+  },
+  span() {
+    const k = UI.spanK, built = k <= S.reach;
+    const b = `<p class="s" style="margin-top:0">The ${RIVER_NAMES[k]} River can only be crossed here. ${built ? '' : `The bridge takes ${ANCIENT_TIMBER[k - 1]} timbers from the Ancient ${TREES[k - 1].name}, carried here and hammered in one by one.`}</p>${spanBody(k)}`
+      + (built || bridgeLock(k) ? '' : `<div class="row" style="margin-top:.45rem"><button class="btn grow" data-a="showanc" data-v="${k - 1}">Show the timbers</button></div>`);
+    return [`${ico('bridge')}<h2>${RIVER_NAMES[k]} River bridge<small>${built ? 'built' : spanOpen(k) ? S.span[k].got + ' of ' + ANCIENT_TIMBER[k - 1] + ' timbers in' : 'not started'}</small></h2>`, '', b];
   },
   hats() {
     const head = `${ico('hats')}<h2>Hats and walks<small>${S.hats.length} of ${HATS.length} hats found</small></h2>`;
@@ -324,6 +330,7 @@ function openPanel(name, arg) {
   UI.panel = name; UI.panelHtml = '';
   if (name === 'bld') UI.bid = arg;
   if (name === 'anc') UI.ancR = arg;
+  if (name === 'span') UI.spanK = arg;
   if (name === 'yard' && arg) UI.tab = arg;
   R.radiusOf = name === 'bld' ? W.bById.get(arg) : null;
   $('panel').classList.remove('hidden');
@@ -358,7 +365,10 @@ function panelAct(a, v) {
   else if (a === 'order') { ok = fillOrder(+v); snd = 'coin'; if (ok) toast('Order delivered', 'good', 'coin'); }
   else if (a === 'axe') { ok = buyAxe(v === '1'); snd = 'upgrade'; if (ok) toast((v === '1' ? 'The crew now swing the ' : 'You forged the ') + AXES[S[v === '1' ? 'crewAxe' : 'axe']].name + '!', 'good', 'axe' + S[v === '1' ? 'crewAxe' : 'axe']); }
   else if (a === 'upg') { ok = buyUpg(v); snd = 'upgrade'; }
-  else if (a === 'place') { if (v.startsWith('bridge')) startBridge(+v.split('|')[1]); else startPlace(v); return; }
+  else if (a === 'place') { startPlace(v); return; }
+  else if (a === 'showspan') { const sx = W.site[+v]; panTo((sx.x + sx.w / 2) * TS, (sx.y + sx.h / 2) * TS); if (R.k < 1) R.kT = R.defaultK(); openPanel('span', +v); return; }
+  else if (a === 'spansend') { const [k, on] = v.split('|'); ok = sendHaulers(+k, on === '1'); snd = on === '1' ? 'hire' : 'click'; if (ok && on === '1') toast(`${countRole('hauler')} hauler${countRole('hauler') === 1 ? '' : 's'} sent to build the bridge`, 'good', 'hauler'); }
+  else if (a === 'spancarry') { ok = cmdSpan(+v) === 'ok'; if (ok) { closePanel(); R.follow = true; R.anchor = null; AUDIO.sfx('click'); return; } }
   else if (a === 'showanc') { const A = W.anc[+v]; panTo(A.x, A.y - 40); if (R.k < 1) R.kT = R.defaultK(); openPanel('anc', +v); return; }
   else if (a === 'ancchop') {
     const r = cmdAncient(+v); ok = r === 'ok';
@@ -385,24 +395,6 @@ function panelAct(a, v) {
 }
 
 // ---------------------------------------------------------------- placing or moving a building
-function setBridgeGhost(tx, ty) {
-  const b = planBridge(tx, ty);
-  R.ghost = b ? { bridge: b } : null;
-  const can = b && b.ok && canAfford(b.cost);
-  $('modebar').innerHTML = `<span>${!b ? 'Tap a river to choose where the bridge goes.' : !b.ok ? b.why + '.' : RIVER_NAMES[b.k] + ' River: ' + chips(b.cost)}</span>
-    <button class="btn green ${can ? '' : 'dis'}" data-a="ok">Build</button><button class="btn" data-a="cancel">Cancel</button>`;
-}
-// k: the river to start on, or 0 for whichever is nearest
-function startBridge(k) {
-  closePanel();
-  UI.place = { type: 'bridge' }; $('modebar').classList.remove('hidden');
-  const P = S.player, px = Math.floor(P.x / TS), py = Math.floor(P.y / TS);
-  let plan = null;
-  for (const j of k ? [k] : Array.from({ length: S.reach }, (_, n) => S.reach - n)) { plan = findBridgeSpot(j, px, py); if (plan) break; }
-  if (plan) { panTo((plan.x + plan.w / 2) * TS, (plan.y + plan.h / 2) * TS); if (R.k < 1) R.kT = R.defaultK(); setBridgeGhost(plan.tx, plan.ty); }
-  else { const w = R.screenToWorld(R.W / 2, R.H / 2); setBridgeGhost(Math.floor(w.x / TS), Math.floor(w.y / TS)); }
-  toast('Tap anywhere along a river to choose the spot, then press Build', null, 'bridge');
-}
 function setGhost(tx, ty) {
   const pl = UI.place, self = pl.moveId ? W.bById.get(pl.moveId) : null;
   R.ghost = { type: pl.type, tx, ty, ok: canPlace(pl.type, tx, ty, self) };
@@ -425,14 +417,7 @@ function startPlace(type, moveId) {
 }
 function endPlace() { UI.place = null; R.ghost = null; $('modebar').classList.add('hidden'); }
 function confirmPlace() {
-  const g = R.ghost, pl = UI.place; if (!pl) return;
-  if (pl.type === 'bridge') {
-    const b = g && g.bridge;
-    if (!b || !b.ok) { AUDIO.sfx('error'); toast(b ? b.why : 'Tap a river first', 'bad'); return; }
-    if (!buildBridge(b)) { AUDIO.sfx('error'); toast(canAfford(b.cost) ? "It can't go there" : "You can't afford it yet", 'bad'); return; }
-    endPlace(); saveGame(); return;
-  }
-  if (!g) return;
+  const g = R.ghost, pl = UI.place; if (!g || !pl) return;
   if (pl.moveId) {
     if (!moveBuilding(pl.moveId, g.tx, g.ty)) { AUDIO.sfx('error'); toast("It can't go there", 'bad'); setGhost(g.tx, g.ty); return; }
     const id = pl.moveId; endPlace(); openPanel('bld', id); saveGame(); return;
@@ -454,11 +439,10 @@ function pickTree(wx, wy) {
 }
 function riverToast(i) {
   const k = S.reach + 1, lock = bridgeLock(k);
-  toast(`The ${RIVER_NAMES[k]} River is in the way. ${lock ? lock + ', then build a bridge' : 'Build a bridge: Build ➜ Bridge'}.`, 'bad', 'bridge');
+  toast(`The ${RIVER_NAMES[k]} River is in the way. ${lock ? lock + ': its timbers make the bridge' : 'The bridge is not finished: send your haulers to build it'}.`, 'bad', 'bridge');
 }
 function onWorldTap(sx, sy) {
   const w = R.screenToWorld(sx, sy);
-  if (UI.place && UI.place.type === 'bridge') { setBridgeGhost(Math.floor(w.x / TS), Math.floor(w.y / TS)); AUDIO.sfx('click'); return; }
   if (UI.place) { const B = BUILD[UI.place.type]; setGhost(Math.floor(w.x / TS) - (B.w >> 1), Math.floor(w.y / TS) - (B.h >> 1)); AUDIO.sfx('click'); return; }
   for (const b of S.buildings) {
     const base = bBase(b), s = spriteOf(b);
@@ -471,6 +455,11 @@ function onWorldTap(sx, sy) {
   for (let r = 0; r < NT; r++) {         // an Ancient tree, or its stump
     const A = W.anc[r], sp = ART.anc[r][1], dx = Math.abs(w.x - A.x), up = A.y - w.y;
     if (S.anc[r].done ? dx < 14 && up > -4 && up < 16 : dx < Math.max(12, sp.w * 0.3) && up > -4 && up < sp.h * 0.8) { openPanel('anc', r); return; }
+    if (S.anc[r].heap > 0) { const h = heapSpot(r); if (Math.abs(w.x - h.x) < 16 && w.y > h.y - 16 && w.y < h.y + 6) { openPanel('anc', r); return; } }
+  }
+  for (let k = S.reach + 1; k < NT; k++) {       // a crossing with no bridge yet
+    const sx = W.site[k];
+    if (w.x > sx.x * TS - 4 && w.x < (sx.x + sx.w) * TS + 4 && w.y > sx.y * TS - 4 && w.y < (sx.y + sx.h) * TS + 4) { openPanel('span', k); return; }
   }
   let best = null, bd = 11;
   for (const p of S.piles) { const t = pileXY(p), d = Math.hypot(t.x - w.x, t.y - 4 - w.y); if (d < bd) { bd = d; best = p; } }
@@ -571,24 +560,26 @@ function onGameEvent(e) {
   if (e.t === 'season') { AUDIO.sfx('order'); toast(`<b>${SEASONS[e.s].name}</b> is here. ${SEASONS[e.s].perk}.`, null, SEASONS[e.s].id); return; }
   if (e.t === 'skill') { if (e.w.lvl === SKILL.length - 1) toast(`${esc(e.w.name)} is now a <b>Master</b> ${ROLES[e.w.role].name.toLowerCase()}`, 'good', e.w.role); return; }
   if (e.t === 'bridge') {
-    if (e.first) toast(`The ${RIVER_NAMES[e.k]} River is bridged. <b>${TREES[e.k].name}</b> grows on the far bank: move a cabin across to cut it.`, 'good', 'bridge');
-    else toast('Another way across', 'good', 'bridge');
-    return;
+    AUDIO.sfx('goal');
+    if (UI.panel === 'span' || UI.panel === 'anc') renderPanel(true);
+    toast(`The ${RIVER_NAMES[e.k]} River is bridged! <b>${TREES[e.k].name}</b> grows on the far bank: move a cabin across to cut it.`, 'good', 'bridge');
+    saveGame(); return;
   }
   if (e.t === 'ancient') {
     AUDIO.sfx('goal'); if (e.hat) AUDIO.sfx('hat');
     const T = TREES[e.r], k = e.r + 1;
     if (UI.panel === 'anc') closePanel();
+    const haulers = countRole('hauler');
     modal(`<img class="bigimg anc" src="${ART.url['anc' + e.r]}"><h2>The Ancient ${T.name} is down!</h2>
-      <p class="p">It leaves a heap of <b>${ANCIENT_LOGS[e.r]} ${T.name} logs</b> for the haulers${e.hat ? `, and out of its branches falls a hat: the <b>${esc(e.hat.name)}</b>` : ''}.${k < NT ? `<br><br>The <b>${RIVER_NAMES[k]} River</b> can now be bridged, to reach the ${TREES[k].name}. Look under <b>Build</b>.` : '<br><br>Every Ancient tree in the forest has fallen to your axes.'}</p>
-      <div class="btns"><button class="btn green" data-a="ok">Onward</button></div>`, () => closeModal());
+      <p class="p">${e.hat ? `Out of its branches falls a hat: the <b>${esc(e.hat.name)}</b>.<br><br>` : ''}${k < NT ? `It leaves <b>${ANCIENT_TIMBER[e.r]} great timbers</b> by the stump, which is just what the bridge over the <b>${RIVER_NAMES[k]} River</b> takes. Haulers carry them to the crossing and hammer them in${haulers ? '' : ' (you have none yet: hire some at a cabin, or carry them yourself)'}. While they are at it, nobody hauls logs.`
+        : `It leaves a heap of <b>${ANCIENT_LOGS} ${T.name} logs</b> for the haulers. Every Ancient tree in the forest has fallen to your axes.`}</p>
+      <div class="btns">${k < NT ? `<button class="btn" data-a="later">Not yet</button><button class="btn green" data-a="send" ${haulers ? '' : 'disabled'}>Send all ${haulers || ''} hauler${haulers === 1 ? '' : 's'} to the bridge</button>` : '<button class="btn green" data-a="later">Onward</button>'}</div>`, a => {
+      closeModal();
+      if (a === 'send' && sendHaulers(k, true)) { AUDIO.sfx('hire'); toast(`${haulers} hauler${haulers === 1 ? '' : 's'} sent to build the bridge. Tap the stump or the crossing to call them back.`, 'good', 'hauler'); }
+    });
     saveGame(); return;
   }
-  if (e.t === 'lodgeStep') { AUDIO.sfx('hire'); toast(`The Lodge's ${esc(e.name.toLowerCase())} are done. Next: <b>${esc(e.next)}</b>`, 'good', 'lodge'); saveGame(); return; }
-  if (e.t === 'rank') {
-    AUDIO.sfx('goal');
-    toast(`The neighbours now call you <b>${RANKS[e.rank].name}</b>. ${RANKS[e.rank].text}${e.hat ? ': the ' + esc(e.hat.name) : ''}.`, 'good', e.hat ? 'hat_' + e.hat.id : 'scroll');
-    saveGame(); return;
+  if (e.t === 'lodge') {    saveGame(); return;
   }
   if (e.t === 'lodge') {
     AUDIO.sfx('goal');
@@ -719,7 +710,7 @@ function openHelp(fromPause) {
     <p>${ico('coin', 'sm')} Tap the yard to <b>sell</b>. Set <b>Keep</b> on anything you want held back for building, orders and the Lodge.</p>
     <p>${ico('cabin', 'sm')} <b>Lumberjacks</b> cut the nearest trees to their cabin, however far that is. <b>Haulers</b> carry the piles in. Tap a cabin to hire, to pick <b>one kind of wood</b> for it, or to <b>move</b> it for free.</p>
     <p>${ico('axe2', 'sm')} The forest grows in rings. Pine by the yard is soft and cheap. Birch, Oak, Maple, Cherry, Redwood and Ebony each lie farther out, take a better <b>axe</b>, and sell for more.</p>
-    <p>${ico('bridge', 'sm')} A <b>river</b> runs round every ring. To cross one, first fell the ring's ${ico('star', 'sm')} <b>Ancient tree</b> (find it on the Map, tap it and call your lumberjacks), then build a <b>bridge</b> wherever you like along the river. Move a cabin across so its crew is close to the new wood.</p>
+    <p>${ico('bridge', 'sm')} A <b>river</b> runs round every ring, with one crossing place that is somewhere different in every forest. To bridge it, first fell the ring's ${ico('star', 'sm')} <b>Ancient tree</b> (find it on the Map, tap it and call your lumberjacks). Its timbers are the bridge: <b>send the haulers</b> to carry them to the crossing and hammer them in, or carry some yourself. Then move a cabin across so its crew is close to the new wood.</p>
     <p>${ico('autumn', 'sm')} The <b>seasons</b> turn every few minutes: trees grow back fastest in spring and slowest in winter, the workshops are quickest in summer, orders pay best in autumn, and haulers sled over winter snow. Tap the season at the top of the screen to see what it does.</p>
     <p>${ico('hauler', 'sm')} Every Meeple has a <b>quirk</b> and gets better with time on the job. If a quirk is wasted where they are, tap <b>Job</b> in their building to move them somewhere it helps.</p>
     <p>${ico('forester', 'sm')} <b>Foresters</b> replant stumps. ${ico('sawyer', 'sm')} <b>Sawyers</b> saw logs into planks. ${ico('collier', 'sm')} <b>Colliers</b> burn cheap logs into charcoal. ${ico('carpenter', 'sm')} <b>Carpenters</b> build furniture. ${ico('carter', 'sm')} <b>Carters</b> wheel loads home from a Log Depot. Each needs its own building.</p>
@@ -734,7 +725,7 @@ function openMap() {
   const done = () => { closeModal(); UI.paused = false; };
   const box = modal(`<h2>The Forest</h2><canvas id="mapcv" width="${MW}" height="${MH}"></canvas>
     <div class="row wrap" style="justify-content:center;margin-top:.5rem">${TREES.map((t, i) => `<span class="chip"><i style="width:.8rem;height:.8rem;background:${shade(t.col, -0.12)};border:2px solid var(--ink)"></i>${t.name}</span>`).join('')}</div>
-    <div class="row wrap" style="justify-content:center"><span class="chip"><i style="width:.8rem;height:.8rem;background:#ffe060;border:2px solid var(--ink)"></i>Ancient tree</span><span class="chip"><i style="width:.8rem;height:.8rem;background:#ffd8a0;border:2px solid var(--ink)"></i>Bridge</span></div>
+    <div class="row wrap" style="justify-content:center"><span class="chip"><i style="width:.8rem;height:.8rem;background:#ffe060;border:2px solid var(--ink)"></i>Ancient tree</span><span class="chip"><i style="width:.8rem;height:.8rem;background:#ffd8a0;border:2px solid var(--ink)"></i>Bridge</span><span class="chip"><i style="width:.8rem;height:.8rem;background:#7a6a5a;border:2px solid var(--ink)"></i>Crossing</span></div>
     <p class="s">Tap the map to look there.</p><div class="btns"><button class="btn green" data-a="ok">Close</button></div>`, done, done);
   const cv = box.querySelector('#mapcv'), g = cv.getContext('2d'), P = S.player;
   g.drawImage(R.minimap(), 0, 0);

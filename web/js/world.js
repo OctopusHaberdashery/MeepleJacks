@@ -36,6 +36,7 @@ function genMap(seed) {
     reg: new Uint8Array(NTILES),     // which ring a tile is in: the number of rivers between it and the yard
     riv: new Uint8Array(NTILES),     // for river water, which river (1 is the innermost)
     anc: [], ancSlots: [], ancShake: [],
+    site: [],                        // site[k]: where the bridge over river k goes, { k, x, y, w, h, v, lo }
     hp: new Map(), claim: new Map(), shake: new Map(), growing: new Set(), pileAt: new Map(), pileById: new Map(), bById: new Map(),
     dirty: [],     // tiles whose look changed, for the zoomed-out tree cache
   };
@@ -56,7 +57,64 @@ function genMap(seed) {
     }
   }
   placeAncients(seed);
+  placeCrossings(seed);
   W.orig = W.kind.slice();
+}
+// The bridge that would cross the river at tile (tx, ty): two tiles wide, straight across, bank to bank.
+// Returns { k, x, y, w, h, v, lo } or null if the banks there won't take one. lo: the yard side is the low end.
+function bridgeGeom(tx, ty, seed) {
+  const i0 = idx(tx, ty), k = W.riv[i0]; if (!k) return null;
+  const px = tx * TS + 8, py = ty * TS + 8;
+  const gx = zoneD(px + TS, py, seed) - zoneD(px - TS, py, seed), gy = zoneD(px, py + TS, seed) - zoneD(px, py - TS, seed);
+  const v = Math.abs(gy) > Math.abs(gx) ? 1 : 0;       // 1: the bridge runs north to south
+  const tile = (a, c) => v ? (inMap(c, a) ? idx(c, a) : -1) : (inMap(a, c) ? idx(a, c) : -1);      // a: along the bridge, c: across it
+  const wet = (a, c) => { const i = tile(a, c); return i >= 0 && W.ter[i] === TER.WATER; };
+  const a0 = v ? ty : tx, c0 = v ? tx : ty;
+  let lo = 1e9, hi = -1e9;
+  for (const c of [c0, c0 + 1]) {
+    let st = a0;
+    if (!wet(st, c)) {            // on a slanting river the second lane starts a tile or two along
+      st = null;
+      for (let d = 1; d <= 3 && st === null; d++) { if (wet(a0 + d, c)) st = a0 + d; else if (wet(a0 - d, c)) st = a0 - d; }
+      if (st === null) continue;
+    }
+    let l = st, h = st;
+    while (wet(l - 1, c) && st - l < 30) l--;
+    while (wet(h + 1, c) && h - st < 30) h++;
+    lo = Math.min(lo, l); hi = Math.max(hi, h);
+  }
+  const len = hi - lo + 1;
+  if (len > BRIDGE_MAX || len < 2) return null;
+  const land = (a, c) => { const i = tile(a, c); if (i < 0 || W.ter[i] !== TER.GRASS) return -1; const x = i % MW, y = (i / MW) | 0; return x < 4 || y < 6 || x >= MW - 4 || y >= MH - 4 ? -1 : W.reg[i]; };
+  const A = land(lo - 1, c0), A2 = land(lo - 1, c0 + 1), B = land(hi + 1, c0), B2 = land(hi + 1, c0 + 1);
+  if (A < 0 || B < 0 || A !== A2 || B !== B2 || Math.min(A, B) !== k - 1 || Math.max(A, B) !== k) return null;
+  if (land(lo - 2, c0) !== A || land(lo - 2, c0 + 1) !== A || land(hi + 2, c0) !== B || land(hi + 2, c0 + 1) !== B) return null;      // room to step on and off
+  for (let a = lo; a <= hi; a++) for (const c of [c0, c0 + 1]) { const i = tile(a, c); if (i < 0 || W.ter[i] === TER.ROCK) return null; }
+  for (const T of W.anc) if (Math.hypot(T.i % MW - tx, ((T.i / MW) | 0) - ty) < 7) return null;
+  return v ? { k, x: c0, y: lo, w: 2, h: len, v, lo: A === k - 1 ? 1 : 0 } : { k, x: lo, y: c0, w: len, h: 2, v, lo: A === k - 1 ? 1 : 0 };
+}
+// One crossing place on each river, at a bearing from the yard that is different for every river and every forest.
+function placeCrossings(seed) {
+  W.site = [null];
+  for (let k = 1; k < NT; k++) {
+    let site = null;
+    for (let j = 0; j < 12 && !site; j++) {
+      const a = (hash2(k, 13 + j, seed + 91) + hash2(seed % 977, k * 7 + j, 5)) * 6.283;
+      const nx = clamp(Math.round(CX + 0.5 + Math.cos(a) * RINGS[k]), 0, MW - 1), ny = clamp(Math.round(CY - 0.5 + Math.sin(a) * RINGS[k]), 0, MH - 1);
+      nearestTile(nx, ny, i => { if (W.riv[i] !== k) return false; const g = bridgeGeom(i % MW, (i / MW) | 0, seed); if (g && g.k === k) { site = g; return true; } return false; }, 30);
+    }
+    if (!site) nearestTile(CX, CY, i => { if (W.riv[i] !== k) return false; const g = bridgeGeom(i % MW, (i / MW) | 0, seed); if (g && g.k === k) { site = g; return true; } return false; });
+    W.site[k] = site || { k, x: clamp(CX + Math.round(RINGS[k]) - 1, 2, MW - 6), y: CY, w: 4, h: 2, v: 0, lo: 1 };
+    // the banks at each end are kept clear
+    const s = W.site[k];
+    for (let yy = -1; yy <= s.h; yy++) for (let xx = -1; xx <= s.w; xx++) if (inMap(s.x + xx, s.y + yy)) { const n = idx(s.x + xx, s.y + yy); W.kind[n] = 0; W.g[n] = 0; }
+    for (const e of [0, 1]) { const p = siteEnd(s, e), tx = Math.floor(p.x / TS), ty = Math.floor(p.y / TS); for (let yy = -1; yy <= 1; yy++) for (let xx = -1; xx <= 1; xx++) if (inMap(tx + xx, ty + yy)) { const n = idx(tx + xx, ty + yy); W.kind[n] = 0; W.g[n] = 0; if (W.ter[n] === TER.ROCK) W.ter[n] = 0; } }
+  }
+}
+// the middle of the bank just off one end of a crossing, in pixels. inner: the end nearer the yard
+function siteEnd(s, inner) {
+  const low = inner ? s.lo : !s.lo;
+  return s.v ? { x: (s.x + 1) * TS, y: (low ? s.y - 1 : s.y + s.h) * TS + 8 } : { x: (low ? s.x - 1 : s.x + s.w) * TS + 8, y: (s.y + 1) * TS };
 }
 // One Ancient tree per ring, in a glade of its own about halfway across the ring.
 function placeAncients(seed) {
@@ -158,20 +216,21 @@ function blankState(slot, seed) {
     workers: [], piles: [], goalsDone: {}, won: false, lodgeStage: 0, lodgeStep: 0,
     hats: [], hat: null, crewHat: null, gait: 0, hatPity: 0,
     orders: [], orderT: 60,
-    anc: ANCIENT_HP.map(hp => ({ hp, done: false, call: false })),      // the Ancient tree of each ring
+    anc: ANCIENT_HP.map(hp => ({ hp, done: false, call: false, heap: 0 })),      // the Ancient tree of each ring; heap: timbers lying by its stump
+    span: ANCIENT_HP.map(() => ({ got: 0, call: false })),              // span[k]: the bridge over river k; got: timbers hammered in
     bridges: [], reach: 0,                                              // reach: the outermost river bridged
     player: { x: YARD_X, y: (CY + 1) * TS + 12, face: 1, carry: [] },
   };
 }
 function resetWorker(w) {
-  Object.assign(w, { st: 'idle', path: [], wait: Math.random(), target: -1, carry: w.carry || [], res: 0, swing: 0, workT: 0, tick: 0, drop: 0, walkT: Math.random() * 3, moving: false, note: '', face: w.face || 1, anc: -1, slot: 0 });
+  Object.assign(w, { st: 'idle', path: [], wait: Math.random(), target: -1, carry: w.carry || [], res: 0, swing: 0, workT: 0, tick: 0, drop: 0, walkT: Math.random() * 3, moving: false, note: '', face: w.face || 1, anc: -1, slot: 0, tim: 0 });
   if (w.gait == null) w.gait = (Math.random() * GAITS.length) | 0;
   if (!QUIRK[w.quirk]) w.quirk = QUIRKS[(Math.random() * QUIRKS.length) | 0].id;
   w.xp = +w.xp || 0; w.lvl = skillOf(w.xp);
 }
 function resetTransient() {
   const P = S.player;
-  Object.assign(P, { st: 'idle', path: [], queue: [], own: [], auto: false, target: -1, swing: 0, pause: 0, walkT: 0, moving: false, drop: 0, anc: -1 });
+  Object.assign(P, { st: 'idle', path: [], queue: [], own: [], auto: false, target: -1, swing: 0, pause: 0, walkT: 0, moving: false, drop: 0, anc: -1, tim: 0, span: 0, workT: 0, tick: 0 });
   SEA = seasonNow();
   for (const sl of W.ancSlots) sl.fill(0);
   P.carry = P.carry || [];
@@ -330,9 +389,12 @@ function hitAncient(r, dmg, who) {
 function fellAncient(r, who) {
   const A = S.anc[r], T = W.anc[r];
   A.hp = 0; A.done = true; A.call = false;
-  let i = T.i + MW; if (W.pileAt.has(i) || W.block[i]) i = T.i + MW + 1;          // the heap lands in front of the stump
-  const pile = { id: S.nextId++, i, type: r, n: ANCIENT_LOGS[r], res: 0, t: 1.5 };
-  S.piles.push(pile); W.pileAt.set(i, pile); W.pileById.set(pile.id, pile);
+  if (r + 1 < NT) A.heap = ANCIENT_TIMBER[r];           // its timbers lie by the stump, waiting to become a bridge
+  else {                                                // the last one has no river beyond it
+    let i = T.i + MW; if (W.pileAt.has(i) || W.block[i]) i = T.i + MW + 1;
+    const pile = { id: S.nextId++, i, type: r, n: ANCIENT_LOGS, res: 0, t: 1.5 };
+    S.piles.push(pile); W.pileAt.set(i, pile); W.pileById.set(pile.id, pile);
+  }
   S.stats.chopped++; S.stats.cut[r]++; S.seen[r] = 1;
   EV.push({ t: 'fall', x: T.x, y: T.y, k: r + 1, anc: r, dir: who.x < T.x ? 1 : -1, me: true });
   // there is always a hat in an Ancient tree, as long as one is left to find
@@ -350,6 +412,7 @@ function callCrew(r, on) {
 // returns: ok | done | river | tough
 function cmdAncient(r) {
   const P = S.player, A = S.anc[r], T = W.anc[r];
+  dropTimber(P); P.span = 0;
   if (A.done) return 'done';
   if (r > S.reach) return 'river';
   if (!canCut(S.axe, r + 1)) return 'tough';
@@ -360,7 +423,6 @@ function cmdAncient(r) {
 
 // ---------------------------------------------------------------- rivers and bridges
 const canReach = i => W.reg[i] <= S.reach;
-const bridgesOver = k => S.bridges.reduce((n, b) => n + (b.k === k ? 1 : 0), 0);
 function applyBridge(b) {
   for (let yy = 0; yy < b.h; yy++) for (let xx = 0; xx < b.w; xx++) {
     const i = idx(b.x + xx, b.y + yy);
@@ -368,75 +430,74 @@ function applyBridge(b) {
     if (W.kind[i]) { W.kind[i] = 0; W.growing.delete(i); W.hp.delete(i); W.claim.delete(i); W.dirty.push(i); }
   }
 }
-// why no bridge over river k can be started yet, or '' if one can
+// why the bridge over river k can't be started yet, or '' if it can
 function bridgeLock(k) {
   if (k > S.reach + 1) return 'Bridge the ' + RIVER_NAMES[k - 1] + ' River first';
   if (k === S.reach + 1 && !S.anc[k - 1].done) return 'Fell the Ancient ' + TREES[k - 1].name + ' first';
   return '';
 }
-// The bridge that would cross the river nearest to tile (tx, ty): two tiles wide, straight across, bank to bank.
-// Returns null when no river is near, else { k, x, y, w, h, v, ok, why, cost }.
-function planBridge(tx, ty) {
-  const i0 = nearestTile(tx, ty, i => W.riv[i] > 0, 7);
-  if (i0 < 0) return null;
-  const k = W.riv[i0], cx = i0 % MW, cy = (i0 / MW) | 0, px = cx * TS + 8, py = cy * TS + 8;
-  const gx = zoneD(px + TS, py, S.seed) - zoneD(px - TS, py, S.seed), gy = zoneD(px, py + TS, S.seed) - zoneD(px, py - TS, S.seed);
-  const v = Math.abs(gy) > Math.abs(gx) ? 1 : 0;       // 1: the bridge runs north to south
-  const tile = (a, c) => v ? (inMap(c, a) ? idx(c, a) : -1) : (inMap(a, c) ? idx(a, c) : -1);      // a: along the bridge, c: across it
-  const wet = (a, c) => { const i = tile(a, c); return i >= 0 && W.ter[i] === TER.WATER; };
-  const a0 = v ? cy : cx, c0 = v ? cx : cy;
-  let lo = 1e9, hi = -1e9;
-  for (const c of [c0, c0 + 1]) {
-    let st = a0;
-    if (!wet(st, c)) {            // on a slanting river the second lane starts a tile or two along
-      st = null;
-      for (let d = 1; d <= 3 && st === null; d++) { if (wet(a0 + d, c)) st = a0 + d; else if (wet(a0 - d, c)) st = a0 - d; }
-      if (st === null) continue;
-    }
-    let l = st, h = st;
-    while (wet(l - 1, c) && st - l < 30) l--;
-    while (wet(h + 1, c) && h - st < 30) h++;
-    lo = Math.min(lo, l); hi = Math.max(hi, h);
-  }
-  const len = hi - lo + 1, b = v ? { k, x: c0, y: lo, w: 2, h: len, v } : { k, x: lo, y: c0, w: len, h: 2, v };
-  b.tx = tx; b.ty = ty; b.cost = bridgeCost(k, bridgesOver(k));
-  b.why = bridgeLock(k);
-  if (!b.why) {
-    if (len > BRIDGE_MAX) b.why = 'The water is too wide here';
-    else {
-      const land = (a, c) => { const i = tile(a, c); return i >= 0 && W.ter[i] === TER.GRASS && !W.block[i] ? W.reg[i] : -1; };
-      const A = land(lo - 1, c0), A2 = land(lo - 1, c0 + 1), B = land(hi + 1, c0), B2 = land(hi + 1, c0 + 1);
-      if (A < 0 || B < 0 || A !== A2 || B !== B2 || Math.min(A, B) !== k - 1 || Math.max(A, B) !== k) b.why = 'The banks are awkward here. Try a straighter stretch';
-      else for (let a = lo; a <= hi && !b.why; a++) for (const c of [c0, c0 + 1]) {
-        const i = tile(a, c);
-        if (i < 0 || W.ter[i] === TER.ROCK || W.ter[i] === TER.BRIDGE || (W.block[i] && W.ter[i] !== TER.WATER) || W.pileAt.has(i)) { b.why = 'Something is in the way here'; break; }
-      }
-    }
-  }
-  b.ok = !b.why;
-  return b;
+// The bridge being built is always the one over the next river, once the Ancient tree before it is down.
+const spanOpen = k => k >= 1 && k < NT && k === S.reach + 1 && S.anc[k - 1].done;
+const spanNow = () => spanOpen(S.reach + 1) ? S.reach + 1 : 0;
+const spanCrew = k => S.workers.reduce((n, w) => n + (w.tim === k ? 1 : 0), 0);
+const heapSpot = r => { const T = W.anc[r]; return { x: T.x + 5, y: T.y + 19 }; };        // where the timbers lie
+// someone carrying timber gives it up: it goes back on the heap
+function dropTimber(e) {
+  if (!e.tim) return;
+  if (e.carry.length) { S.anc[e.tim - 1].heap += e.carry.length; e.carry = []; }
+  e.tim = 0;
 }
-// a place for a bridge over river k, as near to tile (nx, ny) as can be found
-function findBridgeSpot(k, nx, ny) {
-  if (bridgeLock(k)) return null;
-  let plan = null;
-  nearestTile(clamp(nx, 0, MW - 1), clamp(ny, 0, MH - 1), i => {
-    if (W.riv[i] !== k) return false;
-    const p = planBridge(i % MW, (i / MW) | 0);
-    if (p && p.k === k && p.ok) { plan = p; return true; }
-    return false;
-  });
-  return plan;
+// send e to fetch a load of timber for the bridge over river k; false if there is none left to fetch
+function spanTrip(e, k) {
+  if (!spanOpen(k) || S.anc[k - 1].heap <= 0) return false;
+  const h = heapSpot(k - 1), side = e.x < h.x ? -1 : 1;
+  e.tim = k; e.st = 'toHeap'; goTo(e, h.x + side * (7 + Math.random() * 5), h.y + 1 + Math.random() * 5);
+  return true;
 }
-function buildBridge(plan) {
-  const b = plan && planBridge(plan.tx, plan.ty);
-  if (!b || !b.ok || !canAfford(b.cost)) return null;
-  pay(b.cost);
-  const first = b.k > S.reach, br = { k: b.k, x: b.x, y: b.y, w: b.w, h: b.h, v: b.v };
+// at the heap: shoulder up to cap timbers and set off for the crossing
+function spanLoad(e, cap) {
+  const k = e.tim, A = S.anc[k - 1], n = spanOpen(k) ? Math.min(cap, A.heap) : 0;
+  if (n <= 0) { e.tim = 0; return false; }
+  A.heap -= n; for (let j = 0; j < n; j++) e.carry.push(LOG(k - 1));
+  const s = W.site[k], p = siteEnd(s, 1);
+  e.st = 'toSpan'; goTo(e, p.x + (s.v ? (Math.random() - 0.5) * 22 : (Math.random() - 0.5) * 6), p.y + (s.v ? (Math.random() - 0.5) * 6 : (Math.random() - 0.5) * 22));
+  EV.push({ t: 'pick', x: e.x, y: e.y, me: e === S.player });
+  return true;
+}
+// at the crossing: hammer the timbers in one by one. Returns true when the load is used up.
+function spanHammer(e, dt, pace) {
+  const k = e.tim, sp = S.span[k], s = W.site[k];
+  e.moving = false; e.workT -= dt * pace; e.tick -= dt;
+  if (e.tick <= 0) { e.tick = 0.5; const p = siteEnd(s, 1); EV.push({ t: 'work', role: 'span', x: p.x, y: p.y, wx: e.x, wy: e.y }); }
+  while (e.workT <= 0 && e.carry.length && spanOpen(k)) {
+    e.carry.pop(); sp.got++; e.workT += BRIDGE_TIME;
+    if (sp.got >= ANCIENT_TIMBER[k - 1]) { e.carry = []; finishSpan(k); }
+  }
+  if (e.carry.length && spanOpen(k)) return false;
+  e.carry = []; e.tim = 0; return true;
+}
+function finishSpan(k) {
+  const s = W.site[k], br = { k, x: s.x, y: s.y, w: s.w, h: s.h, v: s.v };
+  S.span[k].call = false; S.anc[k - 1].heap = 0;
   S.bridges.push(br); applyBridge(br); rebuildBlocks();
-  S.reach = Math.max(S.reach, b.k);
-  EV.push({ t: 'bridge', k: b.k, first, x: (b.x + b.w / 2) * TS, y: (b.y + b.h / 2) * TS });
-  return br;
+  S.reach = Math.max(S.reach, k);
+  EV.push({ t: 'bridge', k, first: true, x: (s.x + s.w / 2) * TS, y: (s.y + s.h / 2) * TS });
+}
+// send every hauler to the bridge (or back to their log piles)
+function sendHaulers(k, on) {
+  if (!spanOpen(k)) return false;
+  S.span[k].call = !!on;
+  for (const w of S.workers) if (w.role === 'hauler' && (w.st === 'idle' || w.st === 'home')) w.wait = Math.min(w.wait, Math.random() * 0.6);
+  return true;
+}
+// you carry timbers to the bridge yourself, load after load. returns: ok | closed
+function cmdSpan(k) {
+  const P = S.player;
+  if (!spanOpen(k)) return 'closed';
+  P.auto = true; P.queue = []; P.own = []; P.span = k;
+  if (P.st === 'toHeap' || P.st === 'toSpan' || P.st === 'hammer') return 'ok';
+  if (P.carry.length) goDrop(P); else if (!spanTrip(P, k)) { P.span = 0; return 'closed'; }
+  return 'ok';
 }
 
 function takeFromPile(e, pile, want) {
@@ -500,6 +561,7 @@ function cmdChop(i) {
   if (!canReach(i)) return 'river';
   if (W.g[i] < 1) return 'young';
   if (!canCut(S.axe, k)) return 'tough';
+  dropTimber(P); P.span = 0;
   P.auto = true;
   const busy = P.st === 'toTree' || P.st === 'chop';
   if (busy && P.target === i) return 'same';
@@ -510,18 +572,20 @@ function cmdChop(i) {
 }
 function cmdPile(pile) {
   const P = S.player;
+  dropTimber(P); P.span = 0;
   P.auto = true; P.queue = [];
   if (!P.own.includes(pile.id)) P.own.push(pile.id);
   if (P.carry.length >= playerCap()) { goDrop(P); return; }
   goPile(P, pile);
 }
 function cmdDrop(b) {
-  const P = S.player; if (!P.carry.length) return false;
-  P.auto = true; P.queue = []; goDrop(P, b); return true;
+  const P = S.player; if (!P.carry.length || P.tim) return false;
+  P.span = 0; P.auto = true; P.queue = []; goDrop(P, b); return true;
 }
 function cmdWalk(x, y) {
   const P = S.player, tx = Math.floor(x / TS), ty = Math.floor(y / TS);
   if (inMap(tx, ty) && !canReach(idx(tx, ty))) return false;
+  dropTimber(P); P.span = 0;
   P.auto = false; P.queue = []; P.st = 'walk'; goTo(P, x, y);
   return true;
 }
@@ -531,6 +595,11 @@ function goPile(e, pile) {
 }
 function playerThink() {
   const P = S.player;
+  if (P.span) {             // on bridge duty: back to the heap for another load
+    if (P.carry.length && !P.tim) { goDrop(P); return; }
+    if (spanTrip(P, P.span)) return;
+    P.span = 0;
+  }
   while (P.queue.length) { const i = P.queue.shift(); if (isMature(i) && canCut(S.axe, W.kind[i])) { startChop(P, i); return; } }
   P.own = P.own.filter(id => { const p = W.pileById.get(id); return p && p.n - p.res > 0; });
   if (P.carry.length >= playerCap() || (P.carry.length && !P.own.length)) { goDrop(P); return; }
@@ -575,6 +644,17 @@ function updPlayer(dt) {
       break;
     }
     case 'toYard': if (moveStep(P, dt, sp)) { deposit(P); P.st = 'idle'; P.pause = 0.2; } break;
+    case 'toHeap':
+      if (!spanOpen(P.tim)) { dropTimber(P); P.st = 'idle'; break; }
+      if (moveStep(P, dt, sp)) { if (!spanLoad(P, playerCap())) { P.st = 'idle'; P.span = 0; } }
+      break;
+    case 'toSpan':
+      if (!spanOpen(P.tim)) { dropTimber(P); P.st = 'idle'; break; }
+      if (moveStep(P, dt, sp)) { const e = siteEnd(W.site[P.tim], 0); P.st = 'hammer'; P.workT = BRIDGE_TIME; P.tick = 0; P.face = (W.site[P.tim].v ? P.face : e.x > P.x ? 1 : -1); }
+      break;
+    case 'hammer':
+      if (spanHammer(P, dt, 1)) { P.st = 'idle'; P.pause = 0.2; }
+      break;
     case 'toAnc':
       if (!S.anc[P.anc] || S.anc[P.anc].done) { P.st = 'idle'; break; }
       if (moveStep(P, dt, sp)) { P.st = 'chopAnc'; P.swing = PLAYER_SWING * 0.6; P.face = W.anc[P.anc].x > P.x ? 1 : -1; }
@@ -589,6 +669,7 @@ function updPlayer(dt) {
 
 // ---------------------------------------------------------------- the crew
 function releaseWorker(w) {
+  dropTimber(w);
   if (w.anc >= 0) { const sl = W.ancSlots[w.anc]; if (sl && sl[w.slot] === w.id) sl[w.slot] = 0; w.anc = -1; }
   if ((w.role === 'jack' || w.role === 'forester') && w.target >= 0 && W.claim.get(w.target) === w.id) W.claim.delete(w.target);
   if (w.role === 'hauler' && w.res) { const p = W.pileById.get(w.target); if (p) p.res = Math.max(0, p.res - w.res); w.res = 0; }
@@ -646,6 +727,11 @@ function tryJob(w, home) {
       W.claim.set(i, w.id); startChop(w, i); w.note = 'Off to chop ' + TREES[W.kind[i] - 1].name; return true;
     }
     case 'hauler': {
+      const k = spanNow();
+      if (k && S.span[k].call && S.anc[k - 1].heap > 0) {          // sent to the bridge
+        if (w.carry.length) { goDrop(w); w.note = 'Dropping these logs off first'; return true; }
+        if (spanTrip(w, k)) { w.note = 'Fetching timber for the bridge'; return true; }
+      }
       const room = haulerCap(w) - w.carry.length;
       const p = room > 0 ? findPileFor(w, home, w.carry.length ? 8 * TS : 0) : null;
       if (p) { w.res = Math.min(room, p.n - p.res); p.res += w.res; goPile(w, p); w.note = 'Fetching ' + TREES[p.type].name + ' logs'; return true; }
@@ -715,6 +801,20 @@ function updWorker(w, dt) {
       w.moving = false;
       if (!isMature(w.target)) { releaseWorker(w); w.st = 'idle'; w.wait = 0.2; break; }
       if (w.swing <= 0) { w.swing += crewSwing(w, home); if (hitTree(w.target, S.crewAxe, w)) { w.st = 'idle'; w.wait = 1.6 / boss; w.swing = 0; w.target = -1; } }
+      break;
+    case 'toHeap':
+      if (!spanOpen(w.tim) || !S.span[w.tim].call) { releaseWorker(w); w.st = 'idle'; w.wait = 0.3; break; }
+      if (moveStep(w, dt, sp)) {
+        if (spanLoad(w, haulerCap(w))) w.note = 'Carrying ' + w.carry.length + ' timbers to the ' + RIVER_NAMES[w.tim] + ' River';
+        else { w.st = 'idle'; w.wait = 0.3; }
+      }
+      break;
+    case 'toSpan':
+      if (!spanOpen(w.tim)) { releaseWorker(w); w.st = 'idle'; w.wait = 0.3; break; }
+      if (moveStep(w, dt, sp)) { const s = W.site[w.tim], e = siteEnd(s, 0); w.st = 'hammer'; w.workT = BRIDGE_TIME; w.tick = Math.random() * 0.5; if (!s.v) w.face = e.x > w.x ? 1 : -1; w.note = 'Hammering the bridge together'; }
+      break;
+    case 'hammer':
+      if (spanHammer(w, dt, wPace(w))) { w.st = 'idle'; w.wait = 0.2; }
       break;
     case 'toAnc': {
       const A = S.anc[w.anc];
@@ -851,7 +951,8 @@ function canPlace(type, tx, ty, self) {
     const i = idx(x, y);
     if (W.ter[i] || !canReach(i) || (W.block[i] && !mine(x, y)) || W.pileAt.has(i) || (W.kind[i] && W.g[i] >= 0.45)) return false;
   }
-  for (const A of W.anc) { const ax = A.i % MW, ay = (A.i / MW) | 0; if (tx <= ax + 1 && tx + B.w > ax - 1 && ty <= ay + 1 && ty + B.h > ay - 2) return false; }
+  for (const A of W.anc) { const ax = A.i % MW, ay = (A.i / MW) | 0; if (tx <= ax + 1 && tx + B.w > ax - 1 && ty <= ay + 3 && ty + B.h > ay - 2) return false; }
+  if (nearCrossing(tx, ty, B.w, B.h)) return false;
   // leave room around other buildings so roofs never cover a door or the yard's front
   for (const b of S.buildings) {
     if (b === self) continue;
@@ -868,6 +969,11 @@ function stepOut(b) {      // anyone standing where a building now is steps out 
     e.x = d.x + (Math.random() - 0.5) * 16; e.y = d.y + Math.random() * 6;
     if (dest) goTo(e, dest.x, dest.y);
   }
+}
+// is a footprint on, or right at the ends of, a crossing place?
+function nearCrossing(tx, ty, w, h) {
+  for (let k = 1; k < NT; k++) { const s = W.site[k], m = 3; if (tx < s.x + s.w + m && tx + w > s.x - m && ty < s.y + s.h + m && ty + h + 1 > s.y - m) return true; }
+  return false;
 }
 const buildCost = type => BUILD[type].cost(countB(type));
 function placeBuilding(type, tx, ty) {
@@ -1036,11 +1142,12 @@ function update(dt) {
 // ---------------------------------------------------------------- saving
 function snapshot() {
   const grow = {}; for (const i of W.growing) grow[i] = Math.round(W.g[i] * 1000) / 1000;
-  const P = S.player, inv = S.inv.slice();
-  for (const w of S.workers) for (const t of w.carry) inv[t]++;      // goods in transit are banked
+  const P = S.player, inv = S.inv.slice(), anc = S.anc.map(a => Object.assign({}, a));
+  for (const w of S.workers.concat(P)) if (w.tim) anc[w.tim - 1].heap += w.carry.length;      // timbers on a shoulder go back on the heap
+  for (const w of S.workers) if (!w.tim) for (const t of w.carry) inv[t]++;      // goods in transit are banked
   return Object.assign({}, S, {
-    inv, grow, savedAt: Date.now(),
-    player: { x: Math.round(P.x), y: Math.round(P.y), face: P.face, carry: P.carry.slice() },
+    inv, grow, anc, savedAt: Date.now(),
+    player: { x: Math.round(P.x), y: Math.round(P.y), face: P.face, carry: P.tim ? [] : P.carry.slice() },
     workers: S.workers.map(w => ({ id: w.id, role: w.role, home: w.home, name: w.name, col: w.col, gait: w.gait, quirk: w.quirk, xp: Math.round(w.xp), x: Math.round(w.x), y: Math.round(w.y), face: w.face })),
     piles: S.piles.map(p => ({ id: p.id, i: p.i, type: p.type, n: p.n })),
   });
@@ -1070,9 +1177,10 @@ function loadGame(slot) {
   const stats = Object.assign(base.stats, d.stats);
   stats.made = Object.assign({ plank: 0, furn: 0, char: 0 }, stats.made);
   S = Object.assign(base, d, { slot, stats, v: 3 });
-  S.anc = ANCIENT_HP.map((hp, r) => { const a = (d.anc || [])[r] || {}; return { hp: a.done ? 0 : Math.min(hp, a.hp > 0 ? a.hp : hp), done: !!a.done, call: !!a.call && !a.done }; });
-  S.bridges = (d.bridges || []).filter(b => b && b.k >= 1 && b.k < NT && b.w > 0 && b.h > 0 && inMap(b.x, b.y) && inMap(b.x + b.w - 1, b.y + b.h - 1));
-  S.reach = S.bridges.reduce((m, b) => Math.max(m, b.k), 0);
+  S.anc = ANCIENT_HP.map((hp, r) => { const a = (d.anc || [])[r] || {}; return { hp: a.done ? 0 : Math.min(hp, a.hp > 0 ? a.hp : hp), done: !!a.done, call: !!a.call && !a.done, heap: a.done ? Math.max(0, +a.heap || 0) : 0 }; });
+  S.reach = clamp(Math.max(+d.reach || 0, (d.bridges || []).reduce((m, b) => Math.max(m, (b && b.k) || 0), 0)), 0, NT - 1);
+  S.span = ANCIENT_HP.map((_, k) => { const sp = (d.span || [])[k] || {}; return { got: Math.max(0, +sp.got || 0), call: !!sp.call }; });
+  S.bridges = [];
   for (const k of ['inv', 'sold', 'seen', 'autosell', 'keep']) { S[k] = (S[k] || []).slice(0, NI).map(v => +v || 0); while (S[k].length < NI) S[k].push(0); }
   while (S.stats.cut.length < NT) S.stats.cut.push(0);
   if (old) {
@@ -1090,7 +1198,13 @@ function loadGame(slot) {
   }
   S.buildings = S.buildings.filter(b => BUILD[b.type]);
   genMap(S.seed);
-  for (const b of S.bridges) applyBridge(b);
+  // the bridges stand at this forest's crossing places; every Ancient tree inside the outermost one is down
+  for (let k = 1; k <= S.reach; k++) { const s = W.site[k], br = { k, x: s.x, y: s.y, w: s.w, h: s.h, v: s.v }; S.bridges.push(br); applyBridge(br); S.anc[k - 1] = { hp: 0, done: true, call: false, heap: 0 }; }
+  for (let k = S.reach + 1; k < NT; k++) {           // only the next one can be under way: what isn't hammered in is on the heap
+    if (k === S.reach + 1 && S.anc[k - 1].done) { S.span[k].got = Math.min(S.span[k].got, ANCIENT_TIMBER[k - 1] - 1); S.anc[k - 1].heap = ANCIENT_TIMBER[k - 1] - S.span[k].got; }
+    else { S.span[k] = { got: 0, call: false }; S.anc[k - 1].heap = 0; }
+  }
+  for (let k = 0; k <= S.reach; k++) S.span[k] = { got: 0, call: false };
   for (const k in (d.grow || {})) { const i = +k; if (W.kind[i]) { W.g[i] = d.grow[k]; W.growing.add(i); } }
   delete S.grow;
   S.piles = (S.piles || []).filter(p => inMap(p.i % MW, (p.i / MW) | 0) && !W.ter[p.i] && TREES[p.type]);
@@ -1101,28 +1215,23 @@ function loadGame(slot) {
   resetTransient();
   return true;
 }
-// A camp saved before the rivers came: bridge every river it had already worked beyond, count the Ancient
-// trees in its way as felled, and shift any building the water now runs through.
+// A camp saved before the rivers came: every river it had already worked beyond is bridged, the Ancient
+// trees in its way count as felled, and any building the water or a crossing now runs through is shifted.
 function settleRivers() {
-  let reach = 0, far = null, fd = 6 * TS;
+  let reach = 0;
   for (let t = 0; t < NT; t++) if (S.stats.cut[t] > 0 || S.seen[t]) reach = t;
-  for (const b of S.buildings) {
-    const c = bBase(b), d = Math.hypot(c.x - YARD_X, c.y - YARD_Y);
-    reach = Math.max(reach, W.reg[idx(b.x, b.y)]);
-    if (d > fd) { fd = d; far = c; }
-  }
-  const ang = far ? Math.atan2(far.y - YARD_Y, far.x - YARD_X) : 0;
-  for (let k = 1; k <= reach; k++) {
-    S.anc[k - 1] = { hp: 0, done: true, call: false };
+  for (const b of S.buildings) reach = Math.max(reach, W.reg[idx(b.x, b.y)]);
+  for (let k = S.reach + 1; k <= reach; k++) {
+    const s = W.site[k], br = { k, x: s.x, y: s.y, w: s.w, h: s.h, v: s.v };
+    S.anc[k - 1] = { hp: 0, done: true, call: false, heap: 0 };
     S.goalsDone['anc' + (k - 1)] = 1; S.goalsDone['bridge' + k] = 1;
-    const p = findBridgeSpot(k, Math.round(CX + Math.cos(ang) * RINGS[k]), Math.round(CY + Math.sin(ang) * RINGS[k]));
-    if (p) { const br = { k, x: p.x, y: p.y, w: p.w, h: p.h, v: p.v }; S.bridges.push(br); applyBridge(br); rebuildBlocks(); }
-    S.reach = k;
+    S.bridges.push(br); applyBridge(br); S.reach = k;
   }
+  rebuildBlocks();
   for (const b of S.buildings.slice(1)) {
-    const B = BUILD[b.type]; let bad = false;
+    const B = BUILD[b.type]; let bad = nearCrossing(b.x, b.y, B.w, B.h);
     for (let yy = 0; yy <= B.h && !bad; yy++) for (let xx = 0; xx < B.w; xx++) if (W.ter[idx(b.x + xx, Math.min(MH - 1, b.y + yy))] === TER.WATER || W.ter[idx(b.x + xx, Math.min(MH - 1, b.y + yy))] === TER.BRIDGE) { bad = true; break; }
-    for (const A of W.anc) { const ax = A.i % MW, ay = (A.i / MW) | 0; if (b.x <= ax + 1 && b.x + B.w > ax - 1 && b.y <= ay + 1 && b.y + B.h > ay - 2) bad = true; }
+    for (const A of W.anc) { const ax = A.i % MW, ay = (A.i / MW) | 0; if (b.x <= ax + 1 && b.x + B.w > ax - 1 && b.y <= ay + 3 && b.y + B.h > ay - 2) bad = true; }
     if (!bad) continue;
     let spot = null;
     for (let r = 1; r < 40 && !spot; r++) for (let dy = -r; dy <= r && !spot; dy++) for (let dx = -r; dx <= r; dx++) {
