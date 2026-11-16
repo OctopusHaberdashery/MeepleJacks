@@ -67,6 +67,8 @@ img{image-rendering:crisp-edges;image-rendering:pixelated}
 .goal{flex:1;max-width:28rem;margin:0 auto;background:var(--paper);border:3px solid var(--ink);border-radius:.35rem;padding:.3rem .6rem .4rem;box-shadow:0 .22rem 0 var(--ink),0 .4rem .5rem var(--shadow)}
 .goal .gt{display:flex;align-items:center;gap:.4rem;font-weight:900;font-size:.95rem}
 .goal .gd{font-size:.76rem;font-weight:700;color:var(--ink2);line-height:1.2;margin:.05rem 0 .25rem}
+/* with a panel open the goal keeps to one line, so the two never overlap */
+.panel-open .goal .gd{display:none}
 .goal .gp{display:flex;align-items:center;gap:.4rem;font-size:.78rem;font-weight:900}
 .bar{height:.6rem;background:#d8c49a;border:2px solid var(--ink);overflow:hidden;flex:1}
 .bar > i{display:block;height:100%;width:0;background:#6fb84a;box-shadow:inset 0 -.2rem 0 #4a8c2e;transition:width .3s}
@@ -176,6 +178,16 @@ button.chip{font:inherit;font-size:.8rem;font-weight:900;color:var(--ink);cursor
   #panel{top:auto;left:calc(.4rem + env(safe-area-inset-left));right:calc(.4rem + env(safe-area-inset-right));width:auto;height:54vh;bottom:calc(6.4rem + env(safe-area-inset-bottom))}
   .tool{width:3.5rem}
   .modebar{white-space:normal;width:max-content;max-width:94vw;flex-wrap:wrap;justify-content:center}
+}
+/* an iPad held upright: wide enough for the side panel, too narrow for the goal to share the top row */
+@media (min-width:761px) and (max-width:900px){
+  .topbar{flex-wrap:wrap;gap:.45rem}
+  .topbar .brk{display:block;order:7;flex-basis:100%;height:0;margin-top:-.45rem}
+  #hLocate{margin-left:auto}
+  #hSeason{order:8}
+  .goal{order:9;flex:1 1 0;min-width:0;max-width:none;margin:0}
+  #toasts{top:calc(8.4rem + env(safe-area-inset-top))}
+  #panel{top:calc(8.1rem + env(safe-area-inset-top))}
 }
 /* phones held sideways: little height to spare */
 @media (max-height:520px){

@@ -96,7 +96,9 @@ Updates install over the old version and keep your saves.
 3. Open MeepleJacks from the home screen. It runs full screen and works without a connection.
 
 Saves stay on the device you play on; the phone and the tablet each keep their own camps. When a new version is
-published, opening the game while online picks it up.
+published, opening the game while online picks it up. With **Keep screen on** set, the web app asks the browser
+to hold the screen awake while the game is in front. On an iPad held upright the goal gets a row of its own, and
+a pinch on a trackpad zooms the forest.
 
 ## Layout
 
@@ -119,7 +121,7 @@ build-tools and platform jar, and inlines every script into one page (`android/b
 refuse to load separate local files.
 
 ```bash
-VERSION_CODE=4 VERSION_NAME=1.3 bash android/build.sh
+VERSION_CODE=5 VERSION_NAME=1.3.1 bash android/build.sh
 ```
 
 The signing keystore and its password (`android/signing.env`) are git-ignored and must be kept to ship updates.

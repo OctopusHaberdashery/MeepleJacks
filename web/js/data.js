@@ -1,7 +1,7 @@
 // MeepleJacks — game data: map size, trees, goods, tools, buildings, crew, goals. Tune the game here.
 'use strict';
 
-const VERSION = '1.3';
+const VERSION = '1.3.1';
 const TS = 16;                 // art pixels per tile
 const MW = 192, MH = 192;      // map size in tiles
 const CX = 96, CY = 96;        // the Lumber Yard sits here

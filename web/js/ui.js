@@ -29,6 +29,7 @@ function applySettings() {
   R.fade = SET.fade;
   $('fps').classList.toggle('hidden', !SET.showFps);
   if (window.AndroidBridge && AndroidBridge.keepScreenOn) AndroidBridge.keepScreenOn(!!SET.keepAwake);
+  if (typeof keepAwake === 'function') keepAwake();
 }
 
 // ---------------------------------------------------------------- state, toasts, modals
@@ -335,6 +336,7 @@ const PANELS = {
 function openPanel(name, arg) {
   if (UI.place) endPlace();
   UI.panel = name; UI.panelHtml = '';
+  document.body.classList.add('panel-open');
   if (name === 'bld') UI.bid = arg;
   if (name === 'anc') UI.ancR = arg;
   if (name === 'span') UI.spanK = arg;
@@ -346,6 +348,7 @@ function openPanel(name, arg) {
 function closePanel() {
   if (!UI.panel) return;
   UI.panel = null; R.radiusOf = null; $('panel').classList.add('hidden'); $('panel').innerHTML = '';
+  document.body.classList.remove('panel-open');
 }
 function renderPanel(fresh) {
   if (!UI.panel || (UI.panelTouch && !fresh)) return;
@@ -594,7 +597,7 @@ function setupInput() {
   cv.addEventListener('pointercancel', up);
   cv.addEventListener('wheel', e => {
     e.preventDefault();
-    wheelAcc += e.deltaY;
+    wheelAcc += e.deltaY * (e.ctrlKey ? 6 : 1);          // ctrl: a pinch on a trackpad
     if (Math.abs(wheelAcc) >= 50) { R.follow = false; R.zoomBy(wheelAcc < 0 ? 1 : -1, e.clientX, e.clientY); wheelAcc = 0; }
   }, { passive: false });
   // Sound may only start from a finished tap, click or key press (iOS does not count the press itself).

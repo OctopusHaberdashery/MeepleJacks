@@ -75,6 +75,44 @@ window.onAppPause = appPause;
 window.onAppResume = appResume;
 window.addEventListener('resize', () => { if (R.ready) R.resize(); });
 
+// ---------------------------------------------------------------- iPad, iPhone and other browsers
+// What the Android wrapper does for the APK, the web app has to ask the browser for.
+const IS_IOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const IS_IPAD = IS_IOS && !/iPhone|iPod/.test(navigator.userAgent);
+// Keep the screen on while the game is in front: it only runs while it is on screen.
+let wakeLock = null;
+function keepAwake() {
+  if (!navigator.wakeLock) return;
+  if (!SET.keepAwake || document.hidden) { if (wakeLock) { const l = wakeLock; wakeLock = null; try { l.release(); } catch (e) { } } return; }
+  if (wakeLock) return;
+  try {
+    navigator.wakeLock.request('screen').then(l => {
+      if (wakeLock || !SET.keepAwake) { l.release(); return; }
+      wakeLock = l; l.addEventListener('release', () => { if (wakeLock === l) wakeLock = null; });
+    }).catch(() => { });
+  } catch (e) { }
+}
+document.addEventListener('visibilitychange', keepAwake);
+document.addEventListener('pointerup', keepAwake, { capture: true });      // the lock is dropped whenever the app is left: take it again on the next tap
+// Turning the tablet, Split View and Stage Manager: Safari sometimes reports the old size for a moment.
+function refit() { if (R.ready && (window.innerWidth !== R.W || window.innerHeight !== R.H)) R.resize(); }
+window.addEventListener('orientationchange', () => { setTimeout(refit, 120); setTimeout(refit, 500); });
+if (window.visualViewport) window.visualViewport.addEventListener('resize', refit);
+// A long press or a second mouse button brings up a browser menu, and Safari zooms the whole page on a pinch, unless told not to.
+document.addEventListener('contextmenu', e => e.preventDefault());
+// A pinch on a trackpad (iPad with a keyboard case) arrives as these gesture events with no fingers down.
+let padZoom = null;
+document.addEventListener('gesturestart', e => { e.preventDefault(); padZoom = PTR.size === 0 && UI.inGame && !modalOpen() ? R.k : null; }, { passive: false });
+document.addEventListener('gesturechange', e => { e.preventDefault(); if (padZoom === null || PTR.size) { padZoom = null; return; } padZoomTo(padZoom * e.scale, e.clientX, e.clientY, false); }, { passive: false });
+document.addEventListener('gestureend', e => { e.preventDefault(); if (padZoom !== null && !PTR.size) padZoomTo(padZoom * e.scale, e.clientX, e.clientY, true); padZoom = null; }, { passive: false });
+function padZoomTo(k, sx, sy, done) {
+  const before = R.screenToWorld(sx, sy);
+  R.follow = false; R.pinching = !done; R.k = clamp(k, R.kMin, R.kMax); R.z = R.k / R.dpr;
+  const after = R.screenToWorld(sx, sy);
+  R.cam.x += before.x - after.x; R.cam.y += before.y - after.y; R.clampCam();
+  if (done) { const w = R.screenToWorld(sx, sy); R.kT = R.snapK(R.k); R.anchor = { sx, sy, wx: w.x, wy: w.y }; } else R.anchor = null;
+}
+
 const stage = s => window.__stage.push(s);
 async function boot() {
   const bar = p => { const el = $('loading'); if (el && el.firstChild) el.firstChild.textContent = 'Sharpening axes… ' + Math.round(p * 100) + '%'; };
