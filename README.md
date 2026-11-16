@@ -121,7 +121,7 @@ build-tools and platform jar, and inlines every script into one page (`android/b
 refuse to load separate local files.
 
 ```bash
-VERSION_CODE=5 VERSION_NAME=1.3.1 bash android/build.sh
+VERSION_CODE=6 VERSION_NAME=1.3.2 bash android/build.sh
 ```
 
 The signing keystore and its password (`android/signing.env`) are git-ignored and must be kept to ship updates.

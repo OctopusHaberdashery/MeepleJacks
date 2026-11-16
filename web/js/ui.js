@@ -47,7 +47,7 @@ function modal(html, onAct, onBack) {
   const m = $('modal');
   m.innerHTML = `<div class="mbox">${html}</div>`;
   m.classList.remove('hidden');
-  UI.modalAct = onAct; UI.modalBack = onBack || null;
+  UI.modalAct = onAct; UI.modalBack = onBack || null; freshAt = performance.now();
   return m.firstChild;
 }
 function closeModal() { $('modal').classList.add('hidden'); $('modal').innerHTML = ''; UI.modalAct = UI.modalBack = null; }
@@ -335,7 +335,7 @@ const PANELS = {
 };
 function openPanel(name, arg) {
   if (UI.place) endPlace();
-  UI.panel = name; UI.panelHtml = '';
+  UI.panel = name; UI.panelHtml = ''; freshAt = performance.now();
   document.body.classList.add('panel-open');
   if (name === 'bld') UI.bid = arg;
   if (name === 'anc') UI.ancR = arg;
@@ -466,6 +466,8 @@ function startPlace(type, moveId) {
   setGhost(best ? best[0] : cx, best ? best[1] : cy);
   toast(`Tap the ground to choose a spot, then press ${self ? 'Move' : 'Build'}`, null, type === 'lodge' ? 'lodge' : type);
 }
+// the bar's wording changes with each tap on the ground, which can move its buttons
+const barFresh = new MutationObserver(() => { freshAt = performance.now(); });
 function endPlace() { UI.place = null; R.ghost = null; R.draft = null; $('modebar').classList.add('hidden'); }
 function confirmPlace() {
   const g = R.ghost, pl = UI.place; if (!pl) return;
@@ -545,7 +547,7 @@ function onWorldTap(sx, sy) {
 }
 
 const PTR = new Map();
-let pinch = null, dragMoved = false, downAt = 0, wheelAcc = 0, clearDrag = null;
+let pinch = null, dragMoved = false, downAt = 0, wheelAcc = 0, clearDrag = null, worldTapAt = -1e9, freshAt = -1e9;      // when the forest was last tapped, and when a panel, dialog or bar last came up
 function setupInput() {
   const cv = R.cv;
   cv.addEventListener('pointerdown', e => {
@@ -591,7 +593,7 @@ function setupInput() {
       R.kT = R.snapK(R.k); R.anchor = { sx: pinch.cx, sy: pinch.cy, wx: w.x, wy: w.y };
       pinch = null; R.pinching = false;
     }
-    if (PTR.size === 0 && !dragMoved && e.type === 'pointerup' && performance.now() - downAt < 700 && UI.inGame && !UI.paused) onWorldTap(e.clientX, e.clientY);
+    if (PTR.size === 0 && !dragMoved && e.type === 'pointerup' && performance.now() - downAt < 700 && UI.inGame && !UI.paused) { worldTapAt = performance.now(); onWorldTap(e.clientX, e.clientY); }
   };
   cv.addEventListener('pointerup', up);
   cv.addEventListener('pointercancel', up);
@@ -605,16 +607,23 @@ function setupInput() {
   window.addEventListener('keydown', e => { if (e.key === 'Escape') handleBack(); });
 
   // DOM buttons
-  const act = (el, fn) => el.addEventListener('click', e => { const t = e.target.closest('[data-a]'); if (t && !t.disabled) fn(t.dataset.a, t.dataset.v); });
-  act($('panel'), panelAct);
+  const act = (el, fn, fresh) => el.addEventListener('click', e => {
+    // A tap on the forest is followed by a click at the same spot, and by then that tap may have opened a
+    // panel there: tap a workshop and the click landed on whichever wood button came up under the finger.
+    // Nothing that a tap has only just put on screen is pressed by that same tap.
+    if (fresh && freshAt >= worldTapAt && performance.now() - worldTapAt < 400) return;
+    const t = e.target.closest('[data-a]'); if (t && !t.disabled) fn(t.dataset.a, t.dataset.v);
+  });
+  act($('panel'), panelAct, true);
   $('panel').addEventListener('pointerdown', () => { UI.panelTouch = true; });
   for (const ev of ['pointerup', 'pointercancel']) window.addEventListener(ev, () => { setTimeout(() => { UI.panelTouch = false; }, 60); });
-  act($('modal'), (a, v) => { AUDIO.sfx('click'); if (UI.modalAct) UI.modalAct(a, v); });
+  act($('modal'), (a, v) => { AUDIO.sfx('click'); if (UI.modalAct) UI.modalAct(a, v); }, true);
   act($('toolbar'), a => {
     if (a === 'map') { AUDIO.sfx('open'); openMap(); return; }
     if (UI.panel === a) { closePanel(); AUDIO.sfx('close'); } else openPanel(a);
   });
-  act($('modebar'), a => { if (a === 'ok') confirmPlace(); else { endPlace(); AUDIO.sfx('close'); } });
+  barFresh.observe($('modebar'), { childList: true, subtree: true, characterData: true });
+  act($('modebar'), a => { if (a === 'ok') confirmPlace(); else { endPlace(); AUDIO.sfx('close'); } }, true);
   $('hMenu').addEventListener('click', () => { AUDIO.sfx('click'); openPause(); });
   $('hLocate').addEventListener('click', () => { AUDIO.sfx('click'); R.follow = true; R.anchor = null; if (R.k < 1) R.kT = R.defaultK(); });
   $('hGoal').addEventListener('click', () => { const g = curGoal(); if (g) toast(esc(g.d)); });
