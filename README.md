@@ -54,6 +54,22 @@ You start with a rusty hatchet and a Lumber Yard in the middle of a big forest.
   | The Great Lodge | Builder | carries every piece from the yard to the site and fits it |
 
   A cabin can also take a **foreman**, who makes its crew 30% faster.
+- **Upgrades for every trade**, in the yard's Workshop tab:
+
+  | For | Upgrade | Each level |
+  |---|---|---|
+  | Lumberjacks | Whetstones | swing 10% faster |
+  | Lumberjacks | Felling Wedges | 10% more often, a tree they fell drops an extra log |
+  | Haulers | Hauling Sleds | carry 2 more logs |
+  | Haulers | Greased Runners | walk 10% faster |
+  | Haulers | Framing Mallets | on a bridge, carry 3 more timbers and hammer 30% faster |
+  | Carpenters | Fine Chisels | work 30% faster and carry 2 more planks |
+  | Carpenters | Templates | 10% more often, a piece of furniture comes with a spare |
+  | Carpenters | Finishing Oil | furniture sells for 10% more, at the yard and in orders |
+  | Builders | Hods | carry 3 more pieces to the Lodge |
+  | Builders | Scaffolding | fit each piece 25% faster |
+
+  as well as boots for you and the crew, seedling trays, mill blades and bigger carts.
 - **Meeples with quirks.** Everyone you hire has one: Strong Back, Quick Feet, Mighty Swing, Hat Magnet, Green
   Thumb, Nimble Fingers, Early Riser, Daydreamer, Snow Lover or Sun Chaser. Some only help in the right job, so a
   Meeple can be moved to any building with a free place (**Job** in the crew list). They also get better with time
@@ -121,7 +137,7 @@ build-tools and platform jar, and inlines every script into one page (`android/b
 refuse to load separate local files.
 
 ```bash
-VERSION_CODE=6 VERSION_NAME=1.3.2 bash android/build.sh
+VERSION_CODE=7 VERSION_NAME=1.4 bash android/build.sh
 ```
 
 The signing keystore and its password (`android/signing.env`) are git-ignored and must be kept to ship updates.

@@ -1,7 +1,7 @@
 // MeepleJacks — game data: map size, trees, goods, tools, buildings, crew, goals. Tune the game here.
 'use strict';
 
-const VERSION = '1.3.2';
+const VERSION = '1.4';
 const TS = 16;                 // art pixels per tile
 const MW = 192, MH = 192;      // map size in tiles
 const CX = 96, CY = 96;        // the Lumber Yard sits here
@@ -91,6 +91,18 @@ const UPG = {
   blades:    { name: 'Mill Blades',    desc: 'Sawyers saw 30% faster and carry 2 more logs', base: 500,  mult: 3, max: 6, need: 'sawmill',  item: [CHAR, 10] },
   carts:     { name: 'Bigger Carts',   desc: 'Carters carry 12 more logs',                   base: 1500, mult: 3, max: 5, need: 'depot',    item: [PLANK(2), 15] },
   chisels:   { name: 'Fine Chisels',   desc: 'Carpenters work 30% faster and carry 2 more planks', base: 5000, mult: 3, max: 6, need: 'workshop', item: [CHAR, 20] },
+  // lumberjacks
+  whet:      { name: 'Whetstones',     desc: 'Lumberjacks swing 10% faster',                             base: 200,   mult: 3, max: 5, need: 'cabin' },
+  wedges:    { name: 'Felling Wedges', desc: '10% more often, a tree your lumberjacks fell drops an extra log', base: 600, mult: 3, max: 5, need: 'cabin', item: [LOG(1), 15] },
+  // haulers
+  runners:   { name: 'Greased Runners', desc: 'Haulers walk 10% faster',                                 base: 300,   mult: 3, max: 5, need: 'cabin' },
+  mallets:   { name: 'Framing Mallets', desc: 'On a bridge, haulers carry 3 more timbers and hammer 30% faster', base: 500, mult: 3, max: 4, need: 'cabin', item: [LOG(0), 20] },
+  // carpenters
+  templates: { name: 'Templates',      desc: '10% more often, a piece of furniture comes with a spare made from the offcuts', base: 8000, mult: 4, max: 5, need: 'workshop', item: [PLANK(2), 20] },
+  oil:       { name: 'Finishing Oil',  desc: 'Furniture sells for 10% more, at the yard and in orders',  base: 12000, mult: 4, max: 5, need: 'workshop', item: [CHAR, 30] },
+  // builders
+  hods:      { name: 'Hods',           desc: 'Builders carry 3 more pieces to the Lodge',                base: 2000,  mult: 4, max: 5, need: 'lodge',    item: [PLANK(0), 20] },
+  scaffold:  { name: 'Scaffolding',    desc: 'Builders fit each piece 25% faster',                       base: 3000,  mult: 4, max: 5, need: 'lodge',    item: [PLANK(1), 20] },
 };
 function upgCost(k, lvl) {
   const U = UPG[k];

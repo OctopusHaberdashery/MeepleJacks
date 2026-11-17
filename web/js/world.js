@@ -198,13 +198,15 @@ const quirk = (w, q) => !!w && w.quirk === q;
 const wPace = w => (1 + SKILL_BONUS * (w.lvl || 0)) * (w.quirk === 'snow' && SEA === 3 ? 1.3 : 1) * (w.quirk === 'sun' && SEA === 1 ? 1.3 : 1);
 const sledding = w => SEA === 3 && (w.role === 'hauler' || w.role === 'carter');
 const crewSpeed = (w, home) => CREW_SPEED * (1 + 0.12 * S.crewBoots) * (lodgeDone(2) ? 1.1 : 1) * (home && home.foreman ? 1.3 : 1) * (w.role === 'carter' ? 1.15 : 1)
-  * wPace(w) * (w.quirk === 'quick' ? 1.2 : 1) * (sledding(w) ? 1.25 : 1);
+  * wPace(w) * (w.quirk === 'quick' ? 1.2 : 1) * (sledding(w) ? 1.25 : 1) * (w.role === 'hauler' ? 1 + 0.1 * S.runners : 1);
 const haulerCap = w => HAULER_CARRY + 2 * S.crewPack + (lodgeDone(6) ? 4 : 0) + (quirk(w, 'strong') ? 3 : 0);
 const carterCap = w => CARTER_CARRY + 12 * S.carts + (quirk(w, 'strong') ? 8 : 0);
 const craftSpeed = role => (role === 'sawyer' ? 1 + 0.3 * S.blades : role === 'carpenter' ? 1 + 0.3 * S.chisels : 1) * (lodgeDone(4) ? 1.25 : 1) * (SEA === 1 ? 1.2 : 1);
 const benchPace = w => wPace(w) * (w.quirk === 'nimble' ? 1.25 : 1);
 const craftBatch = (role, w) => (role === 'sawyer' ? 6 + 2 * S.blades : role === 'carpenter' ? 6 + 2 * S.chisels : 9) + (quirk(w, 'strong') ? (RECIPE[role].per === 3 ? 3 : 2) : 0);
-const builderCap = w => BUILDER_CARRY + (quirk(w, 'strong') ? 2 : 0);
+const builderCap = w => BUILDER_CARRY + 3 * S.hods + (quirk(w, 'strong') ? 2 : 0);
+// what one of an item fetches: Finishing Oil lifts furniture
+const priceOf = it => ITEMS[it].kind === 'furn' ? Math.round(ITEMS[it].price * (1 + 0.1 * S.oil)) : ITEMS[it].price;
 const restPace = w => w.quirk === 'early' ? 2 : w.quirk === 'dreamer' ? 0.5 : 1;
 const plantTo = () => Math.min(0.9, 0.5 + 0.1 * S.seeds);
 
@@ -216,6 +218,7 @@ function blankState(slot, seed) {
     coins: 0, inv: z(NI), sold: z(NI), seen: z(NI), autosell: z(NI), keep: z(NI),
     stats: { chopped: 0, delivered: 0, sales: 0, earned: 0, cut: z(NT), made: { plank: 0, furn: 0, char: 0 }, orders: 0, planted: 0 },
     axe: 1, crewAxe: 1, boots: 0, pack: 0, crewBoots: 0, crewPack: 0, seeds: 0, blades: 0, carts: 0, chisels: 0,
+    whet: 0, wedges: 0, runners: 0, mallets: 0, templates: 0, oil: 0, hods: 0, scaffold: 0,
     buildings: [{ id: 1, type: 'yard', x: CX - 2, y: CY - 2 }], nextId: 2,
     workers: [], piles: [], goalsDone: {}, won: false, lodgeStage: 0, lodgeStep: 0,
     hats: [], hat: null, crewHat: null, gait: 0, hatPity: 0,
@@ -384,7 +387,7 @@ function fellTree(i, who) {
   W.hp.delete(i); W.claim.delete(i); setGrow(i, 0);
   if (W.clear[i]) { W.kind[i] = 0; W.dirty.push(i); } else W.growing.add(i);       // nothing grows back in a clearing
   // a half-log yield alternates: the 1st, 3rd, 5th… tree of a kind drops the extra log
-  const logs = Math.floor(T.logs) + (T.logs % 1 && S.stats.cut[k - 1] % 2 === 0 ? 1 : 0);
+  const logs = Math.floor(T.logs) + (T.logs % 1 && S.stats.cut[k - 1] % 2 === 0 ? 1 : 0) + (!me && Math.random() < 0.1 * S.wedges ? 1 : 0);      // Felling Wedges: a crew's tree now and then gives one more
   const pile = { id: S.nextId++, i, type: k - 1, n: logs, res: 0, t: 0.75 };
   S.piles.push(pile); W.pileAt.set(i, pile); W.pileById.set(pile.id, pile);
   S.stats.chopped++; S.stats.cut[k - 1]++; S.seen[k - 1] = 1;
@@ -632,7 +635,7 @@ function takeFromPile(e, pile, want) {
 const spare = it => Math.max(0, S.inv[it] - S.keep[it]);     // what may be sold or used, above the amount held back
 function sell(it, n) {
   n = Math.min(n, S.inv[it]); if (n <= 0) return 0;
-  const v = n * ITEMS[it].price;
+  const v = n * priceOf(it);
   S.inv[it] -= n; S.sold[it] += n; S.coins += v; S.stats.sales += n; S.stats.earned += v;
   return v;
 }
@@ -891,7 +894,7 @@ function tryJob(w, home) {
   }
 }
 // seconds between a lumberjack's swings
-const crewSwing = (w, home) => CREW_SWING / ((home.foreman ? 1.3 : 1) * wPace(w) * (w.quirk === 'swing' ? 1.25 : 1));
+const crewSwing = (w, home) => CREW_SWING / ((home.foreman ? 1.3 : 1) * wPace(w) * (w.quirk === 'swing' ? 1.25 : 1) * (1 + 0.1 * S.whet));
 function updWorker(w, dt) {
   const home = W.bById.get(w.home), sp = crewSpeed(w, home), boss = (home.foreman ? 1.3 : 1) * wPace(w);
   if (w.swing > 0) w.swing -= dt;
@@ -930,7 +933,7 @@ function updWorker(w, dt) {
     case 'toHeap':
       if (!spanOpen(w.tim) || !S.span[w.tim].call) { releaseWorker(w); w.st = 'idle'; w.wait = 0.3; break; }
       if (moveStep(w, dt, sp)) {
-        if (spanLoad(w, haulerCap(w))) w.note = 'Carrying ' + w.carry.length + ' timbers to the ' + RIVER_NAMES[w.tim] + ' River';
+        if (spanLoad(w, haulerCap(w) + 3 * S.mallets)) w.note = 'Carrying ' + w.carry.length + ' timbers to the ' + RIVER_NAMES[w.tim] + ' River';
         else { w.st = 'idle'; w.wait = 0.3; }
       }
       break;
@@ -939,7 +942,7 @@ function updWorker(w, dt) {
       if (moveStep(w, dt, sp)) { const s = W.site[w.tim], e = siteEnd(s, 0); w.st = 'hammer'; w.workT = BRIDGE_TIME; w.tick = Math.random() * 0.5; if (!s.v) w.face = e.x > w.x ? 1 : -1; w.note = 'Hammering the bridge together'; }
       break;
     case 'hammer':
-      if (spanHammer(w, dt, wPace(w))) { w.st = 'idle'; w.wait = 0.2; }
+      if (spanHammer(w, dt, wPace(w) * (1 + 0.3 * S.mallets))) { w.st = 'idle'; w.wait = 0.2; }
       break;
     case 'toAnc': {
       const A = S.anc[w.anc];
@@ -1000,7 +1003,7 @@ function updWorker(w, dt) {
       }
       break;
     case 'toWork':
-      if (w.role === 'builder') { if (moveStep(w, dt, sp)) { w.st = 'work'; w.workT = w.carry.length * BUILDER_TIME / benchPace(w); w.tick = 0; w.note = 'Building the Lodge'; } break; }
+      if (w.role === 'builder') { if (moveStep(w, dt, sp)) { w.st = 'work'; w.workT = w.carry.length * BUILDER_TIME / (benchPace(w) * (1 + 0.25 * S.scaffold)); w.tick = 0; w.note = 'Building the Lodge'; } break; }
       if (moveStep(w, dt, sp)) {
         const R = RECIPE[w.role];
         w.st = 'work'; w.workT = (w.carry.length / R.per) * R.time / (craftSpeed(w.role) * benchPace(w)); w.tick = 0; w.face = 1;
@@ -1016,7 +1019,8 @@ function updWorker(w, dt) {
         w.carry = []; w.st = 'idle'; w.wait = 0.2; lodgeCheck(home);
         break;
       }
-      const R = RECIPE[w.role], n = w.carry.length / R.per, out = R.out(w.target);
+      const R = RECIPE[w.role], out = R.out(w.target); let n = w.carry.length / R.per;
+      if (w.role === 'carpenter' && S.templates) { const made = n; for (let k = 0; k < made; k++) if (Math.random() < 0.1 * S.templates) n++; }      // Templates: a spare from the offcuts
       w.carry = []; for (let k = 0; k < n; k++) w.carry.push(out);
       S.stats.made[R.kind] += n;
       goDrop(w, yard()); w.note = 'Carrying ' + ITEMS[out].name.toLowerCase() + ' to the yard';
@@ -1179,14 +1183,14 @@ function newOrder() {
   const pool = [];
   for (let it = 0; it < NI; it++) if (S.seen[it] && !S.orders.some(o => o.item === it)) pool.push(it);
   if (!pool.length) return;
-  pool.sort((a, b) => ITEMS[a].price - ITEMS[b].price);
+  pool.sort((a, b) => priceOf(a) - priceOf(b));
   const pick = list => list[Math.min(list.length - 1, Math.floor(Math.pow(Math.random(), 0.6) * list.length))];
   // each season the neighbours hold a fair of their own, which wants one kind of goods and pays extra for it
   const wanted = pool.filter(i => ITEMS[i].kind === SEASONS[SEA].want), fair = wanted.length && Math.random() < 0.4 ? SEA + 1 : 0;
   const it = pick(fair ? wanted : pool);
   const value = Math.max(40, S.stats.earned * 0.004) * (0.5 + Math.random());
-  const n = clamp(Math.round(value / ITEMS[it].price), 4, 600);
-  S.orders.push({ id: S.nextId++, item: it, n, fair, pay: Math.round(n * ITEMS[it].price * (1.7 + Math.random() * 0.7) * (1 + 0.1 * rankPerks('pay')) * (fair ? 1.3 : 1)), t: 600 + Math.random() * 300 });
+  const n = clamp(Math.round(value / priceOf(it)), 4, 600);
+  S.orders.push({ id: S.nextId++, item: it, n, fair, pay: Math.round(n * priceOf(it) * (1.7 + Math.random() * 0.7) * (1 + 0.1 * rankPerks('pay')) * (fair ? 1.3 : 1)), t: 600 + Math.random() * 300 });
   EV.push({ t: 'order' });
 }
 const orderPay = o => Math.round(o.pay * (SEA === 2 ? 1.25 : 1));       // autumn is harvest time

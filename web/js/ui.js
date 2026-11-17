@@ -152,7 +152,7 @@ function lodgeBody(b) {
   const gc = b.got.coins || 0, left = st.coins - gc;
   h += `<div class="req">${ico('coin')}<div class="grow"><div class="row"><b class="grow">Coins</b><span>${fmt(gc)}/${fmt(st.coins)}</span></div><div class="bar"><i style="width:${gc / st.coins * 100}%"></i></div></div>
     <button class="btn gold sm" data-a="paylodge" ${left > 0 && S.coins > 0 ? '' : 'disabled'}>${left > 0 ? 'Pay ' + fmt(Math.min(S.coins, left)) : 'Paid'}</button></div>`;
-  return h + `<p class="s">Builders carry each piece from the yard, ${BUILDER_CARRY} at a time, and fit it. Holding goods back in the Sell tab keeps them from being sold, but never from the builders.</p>`;
+  return h + `<p class="s">Builders carry each piece from the yard, ${BUILDER_CARRY + 3 * S.hods} at a time, and fit it. Holding goods back in the Sell tab keeps them from being sold, but never from the builders.</p>`;
 }
 function bldBody(b) {
   const B = BUILD[b.type];
@@ -176,7 +176,7 @@ function bldBody(b) {
 const KEEP_STEPS = [0, 10, 25, 50, 100, 250, 500, 1000, 2500];
 function sellCard(it) {
   const n = S.inv[it], sp = spare(it), k = S.keep[it];
-  return `<div class="card"><div class="row">${ico('it' + it, 'lg')}<div class="grow"><div class="t">${ITEMS[it].name} <span class="s">× ${fmt(n)}</span></div><div class="s">${ico('coin', 'sm')}${fmt(ITEMS[it].price)} each</div></div>
+  return `<div class="card"><div class="row">${ico('it' + it, 'lg')}<div class="grow"><div class="t">${ITEMS[it].name} <span class="s">× ${fmt(n)}</span></div><div class="s">${ico('coin', 'sm')}${fmt(priceOf(it))} each</div></div>
     <button class="btn sm" data-a="sell" data-v="${it}|10" ${sp ? '' : 'disabled'}>Sell 10</button><button class="btn sm gold" data-a="sell" data-v="${it}|all" ${sp ? '' : 'disabled'}>All</button></div>
     <div class="row" style="margin-top:.4rem"><span class="s">Auto-sell</span><div class="toggle"><button class="${S.autosell[it] ? 'on' : ''}" data-a="auto" data-v="${it}|1">On</button><button class="${S.autosell[it] ? '' : 'on'}" data-a="auto" data-v="${it}|0">Off</button></div>
     <span class="s grow" style="text-align:right">Keep</span><div class="toggle"><button data-a="keep" data-v="${it}|-1">−</button><button class="mid" disabled>${fmt(k)}</button><button data-a="keep" data-v="${it}|1">+</button></div></div></div>`;
@@ -201,7 +201,7 @@ const PANELS = {
     const tabs = `<div class="tabs">${tabList.map(([k, l]) => `<button class="btn tab ${UI.tab === k ? 'on' : ''}" data-a="tab" data-v="${k}">${l}</button>`).join('')}</div>`;
     let b = '';
     if (UI.tab === 'sell') {
-      let total = 0; for (let it = 0; it < NI; it++) total += spare(it) * ITEMS[it].price;
+      let total = 0; for (let it = 0; it < NI; it++) total += spare(it) * priceOf(it);
       b += `<button class="btn gold wide" data-a="sellall" ${total ? '' : 'disabled'}>Sell everything spare ${ico('coin', 'sm')}${fmt(total)}</button><p class="s">“Keep” holds that many back in the yard: they aren't sold, sawn or burned, so they are there for building, orders and the Lodge.</p>`;
       for (const [title, from, to] of [['Logs', 0, NT], ['Planks', NT, 2 * NT], ['Furniture and charcoal', 2 * NT, NI]]) {
         let sec = '';
@@ -220,7 +220,7 @@ const PANELS = {
         for (const o of S.orders) {
           const have = S.inv[o.item];
           b += `<div class="card"><div class="row">${ico('it' + o.item, 'lg')}<div class="grow"><div class="t">${fmt(o.n)} ${ITEMS[o.item].name}</div><div class="s">${have >= o.n ? 'Ready to deliver' : fmt(have) + ' of ' + fmt(o.n) + ' in the yard'} · ${fmtTime(o.t)} left</div>
-            <span class="chip ok">${ico('coin')}${fmt(orderPay(o))}</span><span class="chip">usual price ${fmt(o.n * ITEMS[o.item].price)}</span>${o.fair ? `<span class="chip">${ico(SEASONS[o.fair - 1].id)}${SEASONS[o.fair - 1].fair}</span>` : ''}</div>
+            <span class="chip ok">${ico('coin')}${fmt(orderPay(o))}</span><span class="chip">usual price ${fmt(o.n * priceOf(o.item))}</span>${o.fair ? `<span class="chip">${ico(SEASONS[o.fair - 1].id)}${SEASONS[o.fair - 1].fair}</span>` : ''}</div>
             <button class="btn green" data-a="order" data-v="${o.id}" ${have >= o.n ? '' : 'disabled'}>Deliver</button></div></div>`;
         }
         if (!S.orders.length) b += '<p class="p">No orders just now. Another will arrive soon.</p>';
@@ -240,7 +240,13 @@ const PANELS = {
           <button class="btn green" data-a="upg" data-v="${k}" ${!max && canAfford(c) ? '' : 'disabled'}>${max ? 'Max' : 'Buy'}</button></div>`;
       };
       b += '<div class="sec">You</div>' + axeCard(false) + upg('boots', 'boots') + upg('pack', 'pack');
-      b += '<div class="sec">Crew</div>' + axeCard(true) + upg('crewBoots', 'boots') + upg('crewPack', 'sled') + upg('seeds', 'seedling') + upg('blades', 'blade') + upg('carts', 'cart') + upg('chisels', 'chisel');
+      const sec = (title, cards) => cards ? `<div class="sec">${title}</div>` + cards : '';
+      b += sec('The whole crew', upg('crewBoots', 'boots'));
+      b += sec('Lumberjacks', axeCard(true) + upg('whet', 'whet') + upg('wedges', 'wedge'));
+      b += sec('Haulers', upg('crewPack', 'sled') + upg('runners', 'runner') + upg('mallets', 'mallet'));
+      b += sec('Foresters, sawyers and carters', upg('seeds', 'seedling') + upg('blades', 'blade') + upg('carts', 'cart'));
+      b += sec('Carpenters', upg('chisels', 'chisel') + upg('templates', 'template') + upg('oil', 'oil'));
+      b += sec('Builders', upg('hods', 'hod') + upg('scaffold', 'scaffold'));
     } else {
       const left = SEASON_LEN - S.playTime % SEASON_LEN;
       b += `<div class="card row">${ico(SEASONS[SEA].id, 'lg')}<div class="grow"><div class="t">${SEASONS[SEA].name}, year ${yearNow()} <span class="s">${fmtTime(left)} until ${SEASONS[(SEA + 1) % 4].name.toLowerCase()}</span></div><div class="s">${SEASONS[SEA].perk}.</div></div></div>`;
@@ -793,6 +799,7 @@ function openHelp(fromPause) {
     <p>${ico('autumn', 'sm')} The <b>seasons</b> turn every few minutes: trees grow back fastest in spring and slowest in winter, the workshops are quickest in summer, orders pay best in autumn, and haulers sled over winter snow. Tap the season at the top of the screen to see what it does.</p>
     <p>${ico('hauler', 'sm')} Every Meeple has a <b>quirk</b> and gets better with time on the job. If a quirk is wasted where they are, tap <b>Job</b> in their building to move them somewhere it helps.</p>
     <p>${ico('forester', 'sm')} <b>Foresters</b> replant stumps. ${ico('sawyer', 'sm')} <b>Sawyers</b> saw logs into planks. ${ico('collier', 'sm')} <b>Colliers</b> burn cheap logs into charcoal. ${ico('carpenter', 'sm')} <b>Carpenters</b> build furniture. ${ico('carter', 'sm')} <b>Carters</b> wheel loads home from a Log Depot. Each needs its own building.</p>
+    <p>${ico('whet', 'sm')} The yard's <b>Workshop</b> tab has upgrades for every trade: sharper axes and wedges for lumberjacks, sleds and runners for haulers, templates and oil for carpenters, hods and scaffolding for builders.</p>
     <p>${ico('scroll', 'sm')} <b>Orders</b> in the yard pay well over the usual price, and every one filled raises your standing with the neighbours.</p>
     <p>${ico('lodge', 'sm')} <b>The Great Lodge</b> is the long project: seven storeys, one for each wood. ${ico('builder', 'sm')} <b>Builders</b> carry every piece from the yard, and each storey brings a lasting reward.</p>
     <p>${ico('hats', 'sm')} Trees sometimes drop <b>hats</b>. Wear them, dress the crew, and pick your walk under Hats.</p>
